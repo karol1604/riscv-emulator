@@ -101,11 +101,14 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    // Creates an executable that will run `test` blocks from the executable's
-    // root module. Note that test executables only test one module at a time,
-    // hence why we have to create two separate ones.
+    // Compile the dedicated test module. It imports the emulator implementation
+    // from src/main.zig and exercises it through its public API.
     const exe_tests = b.addTest(.{
-        .root_module = exe.root_module,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     // A run step that will run the second test executable.

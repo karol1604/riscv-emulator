@@ -1,6 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-const Cpu = struct {
+pub const Cpu = struct {
     regs: [32]u32 = .{0} ** 32,
     /// Program counter
     pc: u32 = 0,
@@ -10,13 +11,15 @@ const Cpu = struct {
         while (@as(usize, @intCast(self.pc)) < program.len) {
             const raw = try self.fetchInstruction(program);
             const instr = try decode(raw);
-            std.debug.print("0x{x:0>8}: {f}\n", .{ self.pc, instr });
+            if (!builtin.is_test) {
+                std.debug.print("0x{x:0>8}: {f}\n", .{ self.pc, instr });
+            }
             self.executeInstruction(instr);
             self.pc +%= 4;
         }
     }
 
-    pub fn dumpRegisters(self: *Cpu) void {
+    pub fn dumpRegisters(self: *const Cpu) void {
         for (self.regs, 0..) |reg, i| {
             std.debug.print("x{d}: 0x{x:0>8} => 0b{b:0>32} => {d}\n", .{ i, reg, reg, reg });
         }
@@ -38,6 +41,36 @@ const Cpu = struct {
                 self.writeRegister(
                     i.rd,
                     self.readRegister(i.rs1) -% self.readRegister(i.rs2),
+                );
+            },
+            .andi => |i| {
+                const imm: u32 = @bitCast(@as(i32, i.imm));
+                self.writeRegister(i.rd, self.readRegister(i.rs1) & imm);
+            },
+            .@"and" => |i| {
+                self.writeRegister(
+                    i.rd,
+                    self.readRegister(i.rs1) & self.readRegister(i.rs2),
+                );
+            },
+            .ori => |i| {
+                const imm: u32 = @bitCast(@as(i32, i.imm));
+                self.writeRegister(i.rd, self.readRegister(i.rs1) | imm);
+            },
+            .@"or" => |i| {
+                self.writeRegister(
+                    i.rd,
+                    self.readRegister(i.rs1) | self.readRegister(i.rs2),
+                );
+            },
+            .xori => |i| {
+                const imm: u32 = @bitCast(@as(i32, i.imm));
+                self.writeRegister(i.rd, self.readRegister(i.rs1) ^ imm);
+            },
+            .xor => |i| {
+                self.writeRegister(
+                    i.rd,
+                    self.readRegister(i.rs1) ^ self.readRegister(i.rs2),
                 );
             },
         }
@@ -86,6 +119,36 @@ const Instruction = union(enum) {
         rs1: Register,
         rs2: Register,
     },
+    andi: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
+    @"and": struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    ori: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
+    @"or": struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    xori: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
+    xor: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
 
     pub fn format(self: Instruction, writer: *std.Io.Writer) !void {
         switch (self) {
@@ -105,6 +168,48 @@ const Instruction = union(enum) {
             },
             .sub => |instr| {
                 try writer.print("sub {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .andi => |instr| {
+                try writer.print("andi {s}, {s}, {d}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    instr.imm,
+                });
+            },
+            .@"and" => |instr| {
+                try writer.print("and {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .ori => |instr| {
+                try writer.print("ori {s}, {s}, {d}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    instr.imm,
+                });
+            },
+            .@"or" => |instr| {
+                try writer.print("or {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .xori => |instr| {
+                try writer.print("xori {s}, {s}, {d}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    instr.imm,
+                });
+            },
+            .xor => |instr| {
+                try writer.print("xor {s}, {s}, {s}", .{
                     @tagName(instr.rd),
                     @tagName(instr.rs1),
                     @tagName(instr.rs2),
@@ -177,6 +282,27 @@ fn decode(instruction: u32) !Instruction {
                         .imm = raw.imm,
                     } };
                 },
+                0b111 => {
+                    return .{ .andi = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
+                0b110 => {
+                    return .{ .ori = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
+                0b100 => {
+                    return .{ .xori = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
                 else => return error.UnsupportedInstruction,
             }
         },
@@ -202,6 +328,42 @@ fn decode(instruction: u32) !Instruction {
                         else => return error.UnsupportedInstruction,
                     }
                 },
+                0b111 => {
+                    switch (raw.funct7) {
+                        0b0000000 => {
+                            return .{ .@"and" = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        else => return error.UnsupportedInstruction,
+                    }
+                },
+                0b110 => {
+                    switch (raw.funct7) {
+                        0b0000000 => {
+                            return .{ .@"or" = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        else => return error.UnsupportedInstruction,
+                    }
+                },
+                0b100 => {
+                    switch (raw.funct7) {
+                        0b0000000 => {
+                            return .{ .xor = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        else => return error.UnsupportedInstruction,
+                    }
+                },
                 else => return error.UnsupportedInstruction,
             }
         },
@@ -211,24 +373,45 @@ fn decode(instruction: u32) !Instruction {
 
 pub fn main() !void {
     const words = [_]u32{
-        0x00500093,
-        0x00708113,
-        0x002081b3,
-        0x40118233,
+        0x00c00093, // addi x1,  x0, 12    => x1  = 12
+        0x00500113, // addi x2,  x0, 5     => x2  = 5
+
+        0x002081b3, // add   x3,  x1, x2    => x3  = 17
+        0x40208233, // sub   x4,  x1, x2    => x4  = 7
+
+        0x0020f2b3, // and   x5,  x1, x2    => x5  = 4
+        0x00a0f313, // andi  x6,  x1, 10    => x6  = 8
+
+        0x0020e3b3, // or    x7,  x1, x2    => x7  = 13
+        0x00816413, // ori   x8,  x2, 8     => x8  = 13
+
+        0x0020c4b3, // xor   x9,  x1, x2    => x9  = 9
+        0x00f0c513, // xori  x10, x1, 15    => x10 = 3
+
+        // sign-extension checks
+        0xfff00593, // addi  x11, x0, -1    => x11 = 0xffffffff
+        0x05a5f613, // andi  x12, x11, 0x5a => x12 = 0x5a
+        0x05506693, // ori   x13, x0, 0x55  => x13 = 0x55
+        0xfff6c713, // xori  x14, x13, -1   => x14 = 0xffffffaa
     };
 
-    var memory: [words.len * 4]u8 = undefined;
-
-    for (words, 0..) |word, i| {
-        const offset = i * 4;
-
-        memory[offset] = @truncate(word);
-        memory[offset + 1] = @truncate(word >> 8);
-        memory[offset + 2] = @truncate(word >> 16);
-        memory[offset + 3] = @truncate(word >> 24);
-    }
+    var buf: [words.len * 4]u8 = undefined;
+    const memory = toBytes(&words, &buf);
 
     var cpu = Cpu{};
-    try cpu.execute(&memory);
+    try cpu.execute(memory);
     cpu.dumpRegisters();
+}
+
+fn toBytes(words: []const u32, bytes: []u8) []u8 {
+    for (words, 0..) |word, i| {
+        std.mem.writeInt(
+            u32,
+            bytes[i * 4 ..][0..4],
+            word,
+            .little,
+        );
+    }
+
+    return bytes[0..];
 }
