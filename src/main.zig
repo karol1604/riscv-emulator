@@ -5,14 +5,14 @@ const Cpu = struct {
     /// Program counter
     pc: u32 = 0,
 
-    pub fn execute(self: *Cpu, program: []const u32) !void {
-        for (program) |instr| {
-            const decoded = try decode(instr);
-            std.debug.print("{f}\n", .{decoded});
-            self.executeInstruction(decoded);
-
-            self.regs[0] = 0; // x0 is always zero
-            self.pc += 4; // increment program counter by 4 bytes (size of instruction)
+    /// Executes a program represented as raw bytes
+    pub fn execute(self: *Cpu, program: []const u8) !void {
+        while (@as(usize, @intCast(self.pc)) < program.len) {
+            const raw = try self.fetchInstruction(program);
+            const instr = try decode(raw);
+            std.debug.print("0x{x:0>8}: {f}\n", .{ self.pc, instr });
+            self.executeInstruction(instr);
+            self.pc +%= 4;
         }
     }
 
@@ -41,6 +41,15 @@ const Cpu = struct {
                 );
             },
         }
+    }
+
+    fn fetchInstruction(self: *const Cpu, memory: []const u8) !u32 {
+        const pc: usize = @intCast(self.pc);
+
+        if (pc + 4 > memory.len) return error.OutOfBounds;
+        if (pc % 4 != 0) return error.UnalignedAccess;
+
+        return std.mem.readInt(u32, memory[pc..][0..4], .little);
     }
 
     fn readRegister(self: *const Cpu, reg: Register) u32 {
@@ -146,6 +155,7 @@ const RawInstructionTypeR = packed struct(u32) {
 const OpCode = enum(u7) {
     op_imm = 0b0010011,
     op_reg = 0b0110011,
+    _,
 };
 
 fn opcode(instruction: u32) OpCode {
@@ -195,19 +205,30 @@ fn decode(instruction: u32) !Instruction {
                 else => return error.UnsupportedInstruction,
             }
         },
-        // else => return error.UnsupportedOpcode,
+        else => return error.UnsupportedOpcode,
     }
 }
 
 pub fn main() !void {
-    const program = [_]u32{
-        0x00500093, // addi x1, x0, 5
-        0x00708113, // addi x2, x1, 7
-        0x002081b3, // add  x3, x1, x2
-        0x40118233, // sub  x4, x3, x1
+    const words = [_]u32{
+        0x00500093,
+        0x00708113,
+        0x002081b3,
+        0x40118233,
     };
 
+    var memory: [words.len * 4]u8 = undefined;
+
+    for (words, 0..) |word, i| {
+        const offset = i * 4;
+
+        memory[offset] = @truncate(word);
+        memory[offset + 1] = @truncate(word >> 8);
+        memory[offset + 2] = @truncate(word >> 16);
+        memory[offset + 3] = @truncate(word >> 24);
+    }
+
     var cpu = Cpu{};
-    try cpu.execute(program[0..]);
+    try cpu.execute(&memory);
     cpu.dumpRegisters();
 }
