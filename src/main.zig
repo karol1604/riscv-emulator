@@ -73,6 +73,51 @@ pub const Cpu = struct {
                     self.readRegister(i.rs1) ^ self.readRegister(i.rs2),
                 );
             },
+            .sll => |i| {
+                const shamt: u5 = @truncate(self.readRegister(i.rs2));
+                self.writeRegister(i.rd, self.readRegister(i.rs1) << shamt);
+            },
+            .slli => |i| {
+                self.writeRegister(i.rd, self.readRegister(i.rs1) << i.shamt);
+            },
+            .srl => |i| {
+                const shamt: u5 = @truncate(self.readRegister(i.rs2));
+                self.writeRegister(i.rd, self.readRegister(i.rs1) >> shamt);
+            },
+            .srli => |i| {
+                self.writeRegister(i.rd, self.readRegister(i.rs1) >> i.shamt);
+            },
+            .sra => |i| {
+                const shamt: u5 = @truncate(self.readRegister(i.rs2));
+                const value: i32 = @bitCast(self.readRegister(i.rs1));
+                const result: u32 = @bitCast(value >> shamt);
+                self.writeRegister(i.rd, result);
+            },
+            .srai => |i| {
+                const value: i32 = @bitCast(self.readRegister(i.rs1));
+                const result: u32 = @bitCast(value >> i.shamt);
+                self.writeRegister(i.rd, result);
+            },
+            .slt => |i| {
+                const lhs: i32 = @bitCast(self.readRegister(i.rs1));
+                const rhs: i32 = @bitCast(self.readRegister(i.rs2));
+                self.writeRegister(i.rd, @intFromBool(lhs < rhs));
+            },
+            .sltu => |i| {
+                const lhs = self.readRegister(i.rs1);
+                const rhs = self.readRegister(i.rs2);
+                self.writeRegister(i.rd, @intFromBool(lhs < rhs));
+            },
+            .slti => |i| {
+                const lhs: i32 = @bitCast(self.readRegister(i.rs1));
+                const rhs: i32 = @intCast(i.imm);
+                self.writeRegister(i.rd, @intFromBool(lhs < rhs));
+            },
+            .sltiu => |i| {
+                const lhs = self.readRegister(i.rs1);
+                const rhs: u32 = @bitCast(@as(i32, i.imm));
+                self.writeRegister(i.rd, @intFromBool(lhs < rhs));
+            },
         }
     }
 
@@ -149,6 +194,56 @@ const Instruction = union(enum) {
         rs1: Register,
         rs2: Register,
     },
+    sll: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    slli: struct {
+        rd: Register,
+        rs1: Register,
+        shamt: u5,
+    },
+    srl: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    srli: struct {
+        rd: Register,
+        rs1: Register,
+        shamt: u5,
+    },
+    sra: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    srai: struct {
+        rd: Register,
+        rs1: Register,
+        shamt: u5,
+    },
+    slt: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    sltu: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    slti: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
+    sltiu: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
 
     pub fn format(self: Instruction, writer: *std.Io.Writer) !void {
         switch (self) {
@@ -215,6 +310,76 @@ const Instruction = union(enum) {
                     @tagName(instr.rs2),
                 });
             },
+            .sll => |instr| {
+                try writer.print("sll {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .slli => |instr| {
+                try writer.print("slli {s}, {s}, {d}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    instr.shamt,
+                });
+            },
+            .srl => |instr| {
+                try writer.print("srl {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .srli => |instr| {
+                try writer.print("srli {s}, {s}, {d}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    instr.shamt,
+                });
+            },
+            .sra => |instr| {
+                try writer.print("sra {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .srai => |instr| {
+                try writer.print("srai {s}, {s}, {d}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    instr.shamt,
+                });
+            },
+            .slt => |instr| {
+                try writer.print("slt {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .sltu => |instr| {
+                try writer.print("sltu {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .slti => |instr| {
+                try writer.print("slti {s}, {s}, {d}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    instr.imm,
+                });
+            },
+            .sltiu => |instr| {
+                try writer.print("sltiu {s}, {s}, {d}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    instr.imm,
+                });
+            },
         }
     }
 };
@@ -235,6 +400,15 @@ const RawInstructionTypeI = packed struct(u32) {
             self.imm,
         });
     }
+};
+
+const RawInstructionTypeShiftI = packed struct(u32) {
+    opcode: u7,
+    rd: u5,
+    funct3: u3,
+    rs1: u5,
+    shamt: u5,
+    funct7: u7,
 };
 
 const RawInstructionTypeR = packed struct(u32) {
@@ -303,7 +477,50 @@ fn decode(instruction: u32) !Instruction {
                         .imm = raw.imm,
                     } };
                 },
-                else => return error.UnsupportedInstruction,
+                0b001 => {
+                    const shift: RawInstructionTypeShiftI = @bitCast(instruction);
+                    if (shift.funct7 != 0b0000000) return error.UnsupportedInstruction;
+
+                    return .{ .slli = .{
+                        .rd = @enumFromInt(shift.rd),
+                        .rs1 = @enumFromInt(shift.rs1),
+                        .shamt = shift.shamt,
+                    } };
+                },
+                0b101 => {
+                    const shift: RawInstructionTypeShiftI = @bitCast(instruction);
+                    switch (shift.funct7) {
+                        0b0000000 => {
+                            return .{ .srli = .{
+                                .rd = @enumFromInt(shift.rd),
+                                .rs1 = @enumFromInt(shift.rs1),
+                                .shamt = shift.shamt,
+                            } };
+                        },
+                        0b0100000 => {
+                            return .{ .srai = .{
+                                .rd = @enumFromInt(shift.rd),
+                                .rs1 = @enumFromInt(shift.rs1),
+                                .shamt = shift.shamt,
+                            } };
+                        },
+                        else => return error.UnsupportedInstruction,
+                    }
+                },
+                0b010 => {
+                    return .{ .slti = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
+                0b011 => {
+                    return .{ .sltiu = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
             }
         },
         .op_reg => {
@@ -364,7 +581,61 @@ fn decode(instruction: u32) !Instruction {
                         else => return error.UnsupportedInstruction,
                     }
                 },
-                else => return error.UnsupportedInstruction,
+                0b001 => {
+                    switch (raw.funct7) {
+                        0b0000000 => {
+                            return .{ .sll = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        else => return error.UnsupportedInstruction,
+                    }
+                },
+                0b101 => {
+                    switch (raw.funct7) {
+                        0b0000000 => {
+                            return .{ .srl = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        0b0100000 => {
+                            return .{ .sra = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        else => return error.UnsupportedInstruction,
+                    }
+                },
+                0b010 => {
+                    switch (raw.funct7) {
+                        0b0000000 => {
+                            return .{ .slt = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        else => return error.UnsupportedInstruction,
+                    }
+                },
+                0b011 => {
+                    switch (raw.funct7) {
+                        0b0000000 => {
+                            return .{ .sltu = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        else => return error.UnsupportedInstruction,
+                    }
+                },
             }
         },
         else => return error.UnsupportedOpcode,
@@ -373,26 +644,26 @@ fn decode(instruction: u32) !Instruction {
 
 pub fn main() !void {
     const words = [_]u32{
-        0x00c00093, // addi x1,  x0, 12    => x1  = 12
-        0x00500113, // addi x2,  x0, 5     => x2  = 5
-
-        0x002081b3, // add   x3,  x1, x2    => x3  = 17
-        0x40208233, // sub   x4,  x1, x2    => x4  = 7
-
-        0x0020f2b3, // and   x5,  x1, x2    => x5  = 4
-        0x00a0f313, // andi  x6,  x1, 10    => x6  = 8
-
-        0x0020e3b3, // or    x7,  x1, x2    => x7  = 13
-        0x00816413, // ori   x8,  x2, 8     => x8  = 13
-
-        0x0020c4b3, // xor   x9,  x1, x2    => x9  = 9
-        0x00f0c513, // xori  x10, x1, 15    => x10 = 3
-
-        // sign-extension checks
-        0xfff00593, // addi  x11, x0, -1    => x11 = 0xffffffff
-        0x05a5f613, // andi  x12, x11, 0x5a => x12 = 0x5a
-        0x05506693, // ori   x13, x0, 0x55  => x13 = 0x55
-        0xfff6c713, // xori  x14, x13, -1   => x14 = 0xffffffaa
+        0x00c00093, // addi x1,  x0, 12
+        0x00500113, // addi x2,  x0, 5
+        0x002081b3, // add  x3,  x1, x2
+        0x40208233, // sub  x4,  x1, x2
+        0x0020f2b3, // and  x5,  x1, x2
+        0x00a0f313, // andi x6,  x1, 10
+        0x0020e3b3, // or   x7,  x1, x2
+        0x00816413, // ori  x8,  x2, 8
+        0x0020c4b3, // xor  x9,  x1, x2
+        0x00f0c513, // xori x10, x1, 15
+        0xfff00593, // addi x11, x0, -1
+        0x05a5f613, // andi x12, x11, 0x5a
+        0x05506693, // ori  x13, x0, 0x55
+        0xfff6c713, // xori x14, x13, -1
+        0x00309793, // slli x15, x1, 3
+        0x00475813, // srli x16, x14, 4
+        0x40475893, // srai x17, x14, 4
+        0x00209933, // sll  x18, x1, x2
+        0x002759b3, // srl  x19, x14, x2
+        0x40275a33, // sra  x20, x14, x2
     };
 
     var buf: [words.len * 4]u8 = undefined;
