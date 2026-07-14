@@ -2,20 +2,16 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const Cpu = struct {
+    const memory_size = 64 * 1024;
     regs: [32]u32 = .{0} ** 32,
     /// Program counter
     pc: u32 = 0,
+    memory: [memory_size]u8 = .{0} ** memory_size,
 
-    /// Executes a program represented as raw bytes
-    pub fn execute(self: *Cpu, program: []const u8) !void {
-        while (@as(usize, @intCast(self.pc)) < program.len) {
-            const raw = try self.fetchInstruction(program);
-            const instr = try decode(raw);
-            if (!builtin.is_test) {
-                std.debug.print("0x{x:0>8}: {f}\n", .{ self.pc, instr });
-            }
-            self.executeInstruction(instr);
-            self.pc +%= 4;
+    /// Executes a number of instructions starting from the current program counter.
+    pub fn run(self: *Cpu, instr_count: usize) !void {
+        for (0..instr_count) |_| {
+            try self.step();
         }
     }
 
@@ -23,6 +19,28 @@ pub const Cpu = struct {
         for (self.regs, 0..) |reg, i| {
             std.debug.print("x{d}: 0x{x:0>8} => 0b{b:0>32} => {d}\n", .{ i, reg, reg, reg });
         }
+    }
+
+    pub fn loadProgramAt(self: *Cpu, address: u32, program: []const u8) !void {
+        const start: usize = @intCast(address);
+        if (start > self.memory.len or program.len > self.memory.len - start) {
+            return error.OutOfBounds;
+        }
+        @memcpy(self.memory[start..][0..program.len], program);
+    }
+
+    fn step(self: *Cpu) !void {
+        const raw = try self.fetchInstruction();
+        const instr = try decode(raw);
+
+        if (!builtin.is_test) {
+            std.debug.print("0x{x:0>8}: {f}\n", .{ self.pc, instr });
+        }
+
+        // Set the default next instruction before execution so a future control-flow
+        // instruction can override it.
+        self.pc +%= 4;
+        self.executeInstruction(instr);
     }
 
     fn executeInstruction(self: *Cpu, instr: Instruction) void {
@@ -121,13 +139,13 @@ pub const Cpu = struct {
         }
     }
 
-    fn fetchInstruction(self: *const Cpu, memory: []const u8) !u32 {
+    fn fetchInstruction(self: *const Cpu) !u32 {
         const pc: usize = @intCast(self.pc);
 
-        if (pc + 4 > memory.len) return error.OutOfBounds;
+        if (pc + 4 > self.memory.len) return error.OutOfBounds;
         if (pc % 4 != 0) return error.UnalignedAccess;
 
-        return std.mem.readInt(u32, memory[pc..][0..4], .little);
+        return std.mem.readInt(u32, self.memory[pc..][0..4], .little);
     }
 
     fn readRegister(self: *const Cpu, reg: Register) u32 {
@@ -670,7 +688,8 @@ pub fn main() !void {
     const memory = toBytes(&words, &buf);
 
     var cpu = Cpu{};
-    try cpu.execute(memory);
+    try cpu.loadProgramAt(0, memory);
+    try cpu.run(words.len);
     cpu.dumpRegisters();
 }
 

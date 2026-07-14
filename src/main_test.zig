@@ -2,14 +2,15 @@ const std = @import("std");
 const Cpu = @import("main.zig").Cpu;
 
 fn executeWords(comptime words: []const u32) !Cpu {
-    var memory: [words.len * @sizeOf(u32)]u8 = undefined;
+    var program: [words.len * @sizeOf(u32)]u8 = undefined;
 
     for (words, 0..) |word, i| {
-        std.mem.writeInt(u32, memory[i * 4 ..][0..4], word, .little);
+        std.mem.writeInt(u32, program[i * 4 ..][0..4], word, .little);
     }
 
     var cpu = Cpu{};
-    try cpu.execute(&memory);
+    try cpu.loadProgramAt(0, &program);
+    try cpu.run(words.len);
     return cpu;
 }
 
@@ -71,6 +72,55 @@ test "executes the complete supported instruction program" {
 
     try std.testing.expectEqualSlices(u32, &expected, cpu.regs[0..expected.len]);
     try std.testing.expectEqual(@as(u32, 24 * 4), cpu.pc);
+}
+
+test "run executes exactly the requested number of instructions" {
+    const words = [_]u32{
+        0x00500093, // addi x1, x0, 5
+        0x00700113, // addi x2, x0, 7
+    };
+    var program: [words.len * 4]u8 = undefined;
+    for (words, 0..) |word, i| {
+        std.mem.writeInt(u32, program[i * 4 ..][0..4], word, .little);
+    }
+
+    var cpu = Cpu{};
+    try cpu.loadProgramAt(0, &program);
+
+    try cpu.run(1);
+    try std.testing.expectEqual(@as(u32, 5), cpu.regs[1]);
+    try std.testing.expectEqual(@as(u32, 0), cpu.regs[2]);
+    try std.testing.expectEqual(@as(u32, 4), cpu.pc);
+
+    try cpu.run(1);
+    try std.testing.expectEqual(@as(u32, 7), cpu.regs[2]);
+    try std.testing.expectEqual(@as(u32, 8), cpu.pc);
+}
+
+test "program can be loaded and executed at a nonzero address" {
+    var program: [4]u8 = undefined;
+    std.mem.writeInt(u32, &program, 0x00700093, .little); // addi x1, x0, 7
+
+    var cpu = Cpu{};
+    try cpu.loadProgramAt(16, &program);
+    cpu.pc = 16;
+    try cpu.run(1);
+
+    try std.testing.expectEqual(@as(u32, 7), cpu.regs[1]);
+    try std.testing.expectEqual(@as(u32, 20), cpu.pc);
+}
+
+test "out-of-range program load fails without modifying memory" {
+    var cpu = Cpu{};
+    const program = [_]u8{ 1, 2, 3, 4 };
+    const address: u32 = @intCast(cpu.memory.len - 2);
+
+    try std.testing.expectError(error.OutOfBounds, cpu.loadProgramAt(address, &program));
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0, 0 },
+        cpu.memory[cpu.memory.len - 2 ..],
+    );
 }
 
 test "x0 remains zero and reads as zero" {
@@ -228,36 +278,40 @@ test "sltiu sign-extends its immediate then compares as unsigned" {
     try std.testing.expectEqual(@as(u32, 1), cpu.regs[4]);
 }
 
-test "incomplete instruction returns OutOfBounds" {
+test "fetching an instruction beyond memory returns OutOfBounds" {
     var cpu = Cpu{};
-    const memory = [_]u8{ 0x93, 0x00, 0x50 };
+    cpu.pc = @intCast(cpu.memory.len - 3);
 
-    try std.testing.expectError(error.OutOfBounds, cpu.execute(&memory));
-    try std.testing.expectEqual(@as(u32, 0), cpu.pc);
+    const initial_pc = cpu.pc;
+    try std.testing.expectError(error.OutOfBounds, cpu.run(1));
+    try std.testing.expectEqual(initial_pc, cpu.pc);
 }
 
 test "unsupported opcode is rejected without advancing pc" {
     var cpu = Cpu{};
-    const memory = [_]u8{ 0xff, 0xff, 0xff, 0xff };
+    const program = [_]u8{ 0xff, 0xff, 0xff, 0xff };
+    try cpu.loadProgramAt(0, &program);
 
-    try std.testing.expectError(error.UnsupportedOpcode, cpu.execute(&memory));
+    try std.testing.expectError(error.UnsupportedOpcode, cpu.run(1));
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
 
 test "unsupported logical funct7 is rejected without advancing pc" {
     var cpu = Cpu{};
-    var memory: [4]u8 = undefined;
-    std.mem.writeInt(u32, &memory, 0x4020f2b3, .little);
+    var program: [4]u8 = undefined;
+    std.mem.writeInt(u32, &program, 0x4020f2b3, .little);
+    try cpu.loadProgramAt(0, &program);
 
-    try std.testing.expectError(error.UnsupportedInstruction, cpu.execute(&memory));
+    try std.testing.expectError(error.UnsupportedInstruction, cpu.run(1));
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
 
 test "unsupported shift-immediate funct7 is rejected without advancing pc" {
     var cpu = Cpu{};
-    var memory: [4]u8 = undefined;
-    std.mem.writeInt(u32, &memory, 0x40109113, .little);
+    var program: [4]u8 = undefined;
+    std.mem.writeInt(u32, &program, 0x40109113, .little);
+    try cpu.loadProgramAt(0, &program);
 
-    try std.testing.expectError(error.UnsupportedInstruction, cpu.execute(&memory));
+    try std.testing.expectError(error.UnsupportedInstruction, cpu.run(1));
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
