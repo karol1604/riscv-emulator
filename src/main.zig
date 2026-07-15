@@ -38,14 +38,12 @@ pub const Cpu = struct {
             std.debug.print("0x{x:0>8}: {f}\n", .{ self.pc, instr });
         }
 
-        // Set the default next instruction before execution so a future control-flow
-        // instruction can override it.
-        self.pc +%= 4;
+        self.pc +%= 4; // increment before execution to handle branches correctly
         errdefer self.pc = instruction_pc;
-        try self.executeInstruction(instr);
+        try self.executeInstruction(instr, instruction_pc);
     }
 
-    fn executeInstruction(self: *Cpu, instr: Instruction) !void {
+    fn executeInstruction(self: *Cpu, instr: Instruction, instruction_pc: u32) !void {
         switch (instr) {
             .addi => |i| {
                 const imm: u32 = @bitCast(@as(i32, i.imm));
@@ -177,7 +175,66 @@ pub const Cpu = struct {
                 const value: u16 = @truncate(self.readRegister(i.rs2));
                 try self.writeMemory(u16, address, value);
             },
+            .beq => |i| {
+                if (self.readRegister(i.rs1) == self.readRegister(i.rs2)) {
+                    try self.takeBranch(instruction_pc, i.imm);
+                }
+            },
+            .bne => |i| {
+                if (self.readRegister(i.rs1) != self.readRegister(i.rs2)) {
+                    try self.takeBranch(instruction_pc, i.imm);
+                }
+            },
+            .blt => |i| {
+                const lhs: i32 = @bitCast(self.readRegister(i.rs1));
+                const rhs: i32 = @bitCast(self.readRegister(i.rs2));
+                if (lhs < rhs) {
+                    try self.takeBranch(instruction_pc, i.imm);
+                }
+            },
+            .bltu => |i| {
+                const lhs = self.readRegister(i.rs1);
+                const rhs = self.readRegister(i.rs2);
+                if (lhs < rhs) {
+                    try self.takeBranch(instruction_pc, i.imm);
+                }
+            },
+            .bge => |i| {
+                const lhs: i32 = @bitCast(self.readRegister(i.rs1));
+                const rhs: i32 = @bitCast(self.readRegister(i.rs2));
+                if (lhs >= rhs) {
+                    try self.takeBranch(instruction_pc, i.imm);
+                }
+            },
+            .bgeu => |i| {
+                const lhs = self.readRegister(i.rs1);
+                const rhs = self.readRegister(i.rs2);
+                if (lhs >= rhs) {
+                    try self.takeBranch(instruction_pc, i.imm);
+                }
+            },
+            .jal => |i| {
+                try self.takeBranch(instruction_pc, i.imm);
+                self.writeRegister(i.rd, instruction_pc +% 4);
+            },
+            .jalr => |i| {
+                const base = self.readRegister(i.rs1);
+                const offset: u32 = @bitCast(@as(i32, i.imm));
+                const target = (base +% offset) & ~@as(u32, 1);
+
+                if (target % 4 != 0) return error.UnalignedAccess;
+
+                self.writeRegister(i.rd, instruction_pc +% 4);
+                self.pc = target;
+            },
         }
+    }
+
+    fn takeBranch(self: *Cpu, instruction_pc: u32, offset: anytype) !void {
+        const offset_bits: u32 = @bitCast(@as(i32, offset));
+        const target = instruction_pc +% offset_bits;
+        if (target % 4 != 0) return error.UnalignedAccess;
+        self.pc = target;
     }
 
     fn effectiveAddress(self: *const Cpu, base: Register, offset: i12) u32 {
@@ -373,6 +430,45 @@ const Instruction = union(enum) {
         rs2: Register,
         imm: i12,
     },
+    beq: struct {
+        rs1: Register,
+        rs2: Register,
+        imm: i13,
+    },
+    bne: struct {
+        rs1: Register,
+        rs2: Register,
+        imm: i13,
+    },
+    blt: struct {
+        rs1: Register,
+        rs2: Register,
+        imm: i13,
+    },
+    bltu: struct {
+        rs1: Register,
+        rs2: Register,
+        imm: i13,
+    },
+    bge: struct {
+        rs1: Register,
+        rs2: Register,
+        imm: i13,
+    },
+    bgeu: struct {
+        rs1: Register,
+        rs2: Register,
+        imm: i13,
+    },
+    jal: struct {
+        rd: Register,
+        imm: i21,
+    },
+    jalr: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
 
     pub fn format(self: Instruction, writer: *std.Io.Writer) !void {
         switch (self) {
@@ -565,6 +661,61 @@ const Instruction = union(enum) {
                     @tagName(instr.rs1),
                 });
             },
+            .beq => |instr| {
+                try writer.print("beq {s}, {s}, {d}", .{
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                    instr.imm,
+                });
+            },
+            .bne => |instr| {
+                try writer.print("bne {s}, {s}, {d}", .{
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                    instr.imm,
+                });
+            },
+            .blt => |instr| {
+                try writer.print("blt {s}, {s}, {d}", .{
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                    instr.imm,
+                });
+            },
+            .bltu => |instr| {
+                try writer.print("bltu {s}, {s}, {d}", .{
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                    instr.imm,
+                });
+            },
+            .bge => |instr| {
+                try writer.print("bge {s}, {s}, {d}", .{
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                    instr.imm,
+                });
+            },
+            .bgeu => |instr| {
+                try writer.print("bgeu {s}, {s}, {d}", .{
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                    instr.imm,
+                });
+            },
+            .jal => |instr| {
+                try writer.print("jal {s}, {d}", .{
+                    @tagName(instr.rd),
+                    instr.imm,
+                });
+            },
+            .jalr => |instr| {
+                try writer.print("jalr {s}, {d}({s})", .{
+                    @tagName(instr.rd),
+                    instr.imm,
+                    @tagName(instr.rs1),
+                });
+            },
         }
     }
 };
@@ -586,11 +737,6 @@ const RawInstructionTypeS = packed struct(u32) {
     imm11_5: u7,
 };
 
-fn decodeStoreImmediate(raw: RawInstructionTypeS) i12 {
-    const bits: u12 = (@as(u12, raw.imm11_5) << 5) | raw.imm4_0;
-    return @bitCast(bits);
-}
-
 const RawInstructionTypeShiftI = packed struct(u32) {
     opcode: u7,
     rd: u5,
@@ -609,11 +755,34 @@ const RawInstructionTypeR = packed struct(u32) {
     funct7: u7,
 };
 
+const RawInstructionTypeSB = packed struct(u32) {
+    opcode: u7,
+    imm11: u1,
+    imm4_1: u4,
+    funct3: u3,
+    rs1: u5,
+    rs2: u5,
+    imm10_5: u6,
+    imm12: u1,
+};
+
+const RawInstructionTypeUJ = packed struct(u32) {
+    opcode: u7,
+    rd: u5,
+    imm19_12: u8,
+    imm11: u1,
+    imm10_1: u10,
+    imm20: u1,
+};
+
 const OpCode = enum(u7) {
     op_imm = 0b0010011,
     op_reg = 0b0110011,
     load = 0b0000011,
     store = 0b0100011,
+    branch = 0b1100011,
+    jal = 0b1101111,
+    jalr = 0b1100111,
     _,
 };
 
@@ -887,11 +1056,98 @@ fn decode(instruction: u32) !Instruction {
                 else => return error.UnsupportedInstruction,
             }
         },
+        .branch => {
+            const raw: RawInstructionTypeSB = @bitCast(instruction);
+            const imm = decodeBranchImmediate(raw);
+            switch (raw.funct3) {
+                0b000 => {
+                    return .{ .beq = .{
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .rs2 = @enumFromInt(raw.rs2),
+                        .imm = imm,
+                    } };
+                },
+                0b001 => {
+                    return .{ .bne = .{
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .rs2 = @enumFromInt(raw.rs2),
+                        .imm = imm,
+                    } };
+                },
+                0b100 => {
+                    return .{ .blt = .{
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .rs2 = @enumFromInt(raw.rs2),
+                        .imm = imm,
+                    } };
+                },
+                0b110 => {
+                    return .{ .bltu = .{
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .rs2 = @enumFromInt(raw.rs2),
+                        .imm = imm,
+                    } };
+                },
+                0b101 => {
+                    return .{ .bge = .{
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .rs2 = @enumFromInt(raw.rs2),
+                        .imm = imm,
+                    } };
+                },
+                0b111 => {
+                    return .{ .bgeu = .{
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .rs2 = @enumFromInt(raw.rs2),
+                        .imm = imm,
+                    } };
+                },
+                else => return error.UnsupportedInstruction,
+            }
+        },
+        .jal => {
+            const raw: RawInstructionTypeUJ = @bitCast(instruction);
+            const imm_bits: u21 =
+                (@as(u21, raw.imm20) << 20) |
+                (@as(u21, raw.imm19_12) << 12) |
+                (@as(u21, raw.imm11) << 11) |
+                (@as(u21, raw.imm10_1) << 1);
+            return .{ .jal = .{
+                .rd = @enumFromInt(raw.rd),
+                .imm = @bitCast(imm_bits),
+            } };
+        },
+        .jalr => {
+            const raw: RawInstructionTypeI = @bitCast(instruction);
+            if (raw.funct3 != 0b000) return error.UnsupportedInstruction;
+
+            return .{ .jalr = .{
+                .rd = @enumFromInt(raw.rd),
+                .rs1 = @enumFromInt(raw.rs1),
+                .imm = raw.imm,
+            } };
+        },
         else => return error.UnsupportedOpcode,
     }
 }
 
+fn decodeBranchImmediate(raw: RawInstructionTypeSB) i13 {
+    const bits: u13 =
+        (@as(u13, raw.imm12) << 12) |
+        (@as(u13, raw.imm11) << 11) |
+        (@as(u13, raw.imm10_5) << 5) |
+        (@as(u13, raw.imm4_1) << 1);
+    return @bitCast(bits);
+}
+
+fn decodeStoreImmediate(raw: RawInstructionTypeS) i12 {
+    const bits: u12 = (@as(u12, raw.imm11_5) << 5) | raw.imm4_0;
+    return @bitCast(bits);
+}
+
 pub fn main() !void {
+    std.debug.print("=== Instruction demo ===\n", .{});
+
     const words = [_]u32{
         0x00c00093, // addi x1,  x0, 12
         0x00500113, // addi x2,  x0, 5
@@ -913,11 +1169,30 @@ pub fn main() !void {
         0x00209933, // sll  x18, x1, x2
         0x002759b3, // srl  x19, x14, x2
         0x40275a33, // sra  x20, x14, x2
-        0x08000a93, // addi x21, x0, 128
+        0x20000a93, // addi x21, x0, 512
         0x00eaa223, // sw   x14, 4(x21)
         0x004aab03, // lw   x22, 4(x21)
         0xfedaae23, // sw   x13, -4(x21)
         0xffcaab83, // lw   x23, -4(x21)
+        0x00100c13, // addi x24, x0, 1
+        0x00200c93, // addi x25, x0, 2
+        0x019c0463, // beq  x24, x25, 8 (not taken)
+        0x00a00d13, // addi x26, x0, 10
+        0x019c1463, // bne  x24, x25, 8
+        0x06300d93, // addi x27, x0, 99 (skipped)
+        0x00b00d93, // addi x27, x0, 11
+        0x019c4463, // blt  x24, x25, 8
+        0x06300e13, // addi x28, x0, 99 (skipped)
+        0x00c00e13, // addi x28, x0, 12
+        0x018cd463, // bge  x25, x24, 8
+        0x06300e93, // addi x29, x0, 99 (skipped)
+        0x00d00e93, // addi x29, x0, 13
+        0x00ec6463, // bltu x24, x14, 8
+        0x06300f13, // addi x30, x0, 99 (skipped)
+        0x00e00f13, // addi x30, x0, 14
+        0x01877463, // bgeu x14, x24, 8
+        0x06300f93, // addi x31, x0, 99 (skipped)
+        0x00f00f93, // addi x31, x0, 15
     };
 
     var buf: [words.len * 4]u8 = undefined;
@@ -925,8 +1200,57 @@ pub fn main() !void {
 
     var cpu = Cpu{};
     try cpu.loadProgramAt(0, memory);
-    try cpu.run(words.len);
+    try cpu.run(words.len - 5); // five taken branches each skip one instruction
     cpu.dumpRegisters();
+
+    std.debug.print("\n=== Loop demo ===\n", .{});
+
+    const loop_words = [_]u32{
+        0x00000093, // addi x1, x0, 0   (counter = 0)
+        0x00a00113, // addi x2, x0, 10  (limit = 10)
+        0x00108093, // addi x1, x1, 1   (counter += 1)
+        0xfe20cee3, // blt  x1, x2, -4  (loop while counter < limit)
+    };
+
+    var loop_buf: [loop_words.len * 4]u8 = undefined;
+    const loop_memory = toBytes(&loop_words, &loop_buf);
+
+    var loop_cpu = Cpu{};
+    try loop_cpu.loadProgramAt(0, loop_memory);
+    try loop_cpu.run(2 + (2 * 10));
+
+    std.debug.print("counter: {d}, limit: {d}, pc: 0x{x:0>8}\n", .{
+        loop_cpu.regs[1],
+        loop_cpu.regs[2],
+        loop_cpu.pc,
+    });
+    loop_cpu.dumpRegisters();
+
+    std.debug.print("\n=== Function call demo ===\n", .{});
+
+    const function_words = [_]u32{
+        0x00700513, // addi a0, x0, 7      (argument = 7)
+        0x00c000ef, // jal  ra, 12          (call function at 0x10)
+        0x00150593, // addi x11, a0, 1      (runs after return)
+        0x00c0006f, // jal  x0, 12          (skip function body)
+        0x00550513, // addi a0, a0, 5       (function: return a0 + 5)
+        0x00008067, // jalr x0, 0(ra)        (return)
+        0x00050613, // addi x12, a0, 0      (end marker/result copy)
+    };
+
+    var function_buf: [function_words.len * 4]u8 = undefined;
+    const function_memory = toBytes(&function_words, &function_buf);
+
+    var function_cpu = Cpu{};
+    try function_cpu.loadProgramAt(0, function_memory);
+    try function_cpu.run(7);
+
+    std.debug.print("return address: 0x{x:0>8}, result: {d}, after return: {d}, pc: 0x{x:0>8}\n", .{
+        function_cpu.regs[1],
+        function_cpu.regs[10],
+        function_cpu.regs[11],
+        function_cpu.pc,
+    });
 }
 
 fn toBytes(words: []const u32, bytes: []u8) []u8 {

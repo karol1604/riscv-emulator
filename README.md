@@ -1,0 +1,6 @@
+# RISC-V Emulator
+
+A small RISC-V (rv32i) emulator written in Zig. It models a 32-bit CPU with 32
+registers, 64 KiB of memory and instruction decoding.
+
+This is an educational project. And it's not even an emulator yet. It is a work in progress.
