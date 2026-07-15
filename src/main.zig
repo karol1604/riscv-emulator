@@ -30,6 +30,7 @@ pub const Cpu = struct {
     }
 
     fn step(self: *Cpu) !void {
+        const instruction_pc = self.pc;
         const raw = try self.fetchInstruction();
         const instr = try decode(raw);
 
@@ -40,10 +41,11 @@ pub const Cpu = struct {
         // Set the default next instruction before execution so a future control-flow
         // instruction can override it.
         self.pc +%= 4;
-        self.executeInstruction(instr);
+        errdefer self.pc = instruction_pc;
+        try self.executeInstruction(instr);
     }
 
-    fn executeInstruction(self: *Cpu, instr: Instruction) void {
+    fn executeInstruction(self: *Cpu, instr: Instruction) !void {
         switch (instr) {
             .addi => |i| {
                 const imm: u32 = @bitCast(@as(i32, i.imm));
@@ -136,7 +138,76 @@ pub const Cpu = struct {
                 const rhs: u32 = @bitCast(@as(i32, i.imm));
                 self.writeRegister(i.rd, @intFromBool(lhs < rhs));
             },
+            .lw => |i| {
+                const address = self.effectiveAddress(i.rs1, i.imm);
+                const value = try self.readMemory(u32, address);
+                self.writeRegister(i.rd, value);
+            },
+            .sw => |i| {
+                const address = self.effectiveAddress(i.rs1, i.imm);
+                try self.writeMemory(u32, address, self.readRegister(i.rs2));
+            },
+            .lb => |i| {
+                const address = self.effectiveAddress(i.rs1, i.imm);
+                const value: i8 = @bitCast(try self.readMemory(u8, address));
+                const extended: i32 = @intCast(value);
+                self.writeRegister(i.rd, @bitCast(extended));
+            },
+            .lbu => |i| {
+                const address = self.effectiveAddress(i.rs1, i.imm);
+                self.writeRegister(i.rd, @intCast(try self.readMemory(u8, address)));
+            },
+            .lh => |i| {
+                const address = self.effectiveAddress(i.rs1, i.imm);
+                const value: i16 = @bitCast(try self.readMemory(u16, address));
+                const extended: i32 = @intCast(value);
+                self.writeRegister(i.rd, @bitCast(extended));
+            },
+            .lhu => |i| {
+                const address = self.effectiveAddress(i.rs1, i.imm);
+                self.writeRegister(i.rd, @intCast(try self.readMemory(u16, address)));
+            },
+            .sb => |i| {
+                const address = self.effectiveAddress(i.rs1, i.imm);
+                const value: u8 = @truncate(self.readRegister(i.rs2));
+                try self.writeMemory(u8, address, value);
+            },
+            .sh => |i| {
+                const address = self.effectiveAddress(i.rs1, i.imm);
+                const value: u16 = @truncate(self.readRegister(i.rs2));
+                try self.writeMemory(u16, address, value);
+            },
         }
+    }
+
+    fn effectiveAddress(self: *const Cpu, base: Register, offset: i12) u32 {
+        const base_value = self.readRegister(base);
+        const offset_value: u32 = @bitCast(@as(i32, offset));
+        return base_value +% offset_value;
+    }
+
+    fn validateAccess(self: *const Cpu, address: u32, comptime T: type) !usize {
+        const addr: usize = @intCast(address);
+        const size = @sizeOf(T);
+
+        if (addr + size > self.memory.len) return error.OutOfBounds;
+        if (addr % size != 0) return error.UnalignedAccess;
+        return addr;
+    }
+
+    fn readMemory(self: *const Cpu, comptime T: type, address: u32) !T {
+        const addr = try self.validateAccess(address, T);
+        if (T == u8) return self.memory[addr];
+        return std.mem.readInt(T, self.memory[addr..][0..@sizeOf(T)], .little);
+    }
+
+    fn writeMemory(self: *Cpu, comptime T: type, address: u32, value: T) !void {
+        const addr = try self.validateAccess(address, T);
+        if (T == u8) {
+            self.memory[addr] = value;
+            return;
+        }
+        std.mem.writeInt(T, self.memory[addr..][0..@sizeOf(T)], value, .little);
     }
 
     fn fetchInstruction(self: *const Cpu) !u32 {
@@ -260,6 +331,46 @@ const Instruction = union(enum) {
     sltiu: struct {
         rd: Register,
         rs1: Register,
+        imm: i12,
+    },
+    lw: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
+    sw: struct {
+        rs1: Register,
+        rs2: Register,
+        imm: i12,
+    },
+    lb: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
+    lbu: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
+    lh: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
+    lhu: struct {
+        rd: Register,
+        rs1: Register,
+        imm: i12,
+    },
+    sb: struct {
+        rs1: Register,
+        rs2: Register,
+        imm: i12,
+    },
+    sh: struct {
+        rs1: Register,
+        rs2: Register,
         imm: i12,
     },
 
@@ -398,6 +509,62 @@ const Instruction = union(enum) {
                     instr.imm,
                 });
             },
+            .lw => |instr| {
+                try writer.print("lw {s}, {d}({s})", .{
+                    @tagName(instr.rd),
+                    instr.imm,
+                    @tagName(instr.rs1),
+                });
+            },
+            .sw => |instr| {
+                try writer.print("sw {s}, {d}({s})", .{
+                    @tagName(instr.rs2),
+                    instr.imm,
+                    @tagName(instr.rs1),
+                });
+            },
+            .lb => |instr| {
+                try writer.print("lb {s}, {d}({s})", .{
+                    @tagName(instr.rd),
+                    instr.imm,
+                    @tagName(instr.rs1),
+                });
+            },
+            .lbu => |instr| {
+                try writer.print("lbu {s}, {d}({s})", .{
+                    @tagName(instr.rd),
+                    instr.imm,
+                    @tagName(instr.rs1),
+                });
+            },
+            .lh => |instr| {
+                try writer.print("lh {s}, {d}({s})", .{
+                    @tagName(instr.rd),
+                    instr.imm,
+                    @tagName(instr.rs1),
+                });
+            },
+            .lhu => |instr| {
+                try writer.print("lhu {s}, {d}({s})", .{
+                    @tagName(instr.rd),
+                    instr.imm,
+                    @tagName(instr.rs1),
+                });
+            },
+            .sb => |instr| {
+                try writer.print("sb {s}, {d}({s})", .{
+                    @tagName(instr.rs2),
+                    instr.imm,
+                    @tagName(instr.rs1),
+                });
+            },
+            .sh => |instr| {
+                try writer.print("sh {s}, {d}({s})", .{
+                    @tagName(instr.rs2),
+                    instr.imm,
+                    @tagName(instr.rs1),
+                });
+            },
         }
     }
 };
@@ -408,17 +575,21 @@ const RawInstructionTypeI = packed struct(u32) {
     funct3: u3,
     rs1: u5,
     imm: i12,
-
-    pub fn format(self: RawInstructionTypeI, writer: *std.Io.Writer) !void {
-        try writer.print("RawInstructionTypeI {{ opcode: 0b{b:0>7}, rd: {d}, funct3: 0b{b:0>3}, rs1: {d}, imm: {d} }}", .{
-            self.opcode,
-            self.rd,
-            self.funct3,
-            self.rs1,
-            self.imm,
-        });
-    }
 };
+
+const RawInstructionTypeS = packed struct(u32) {
+    opcode: u7,
+    imm4_0: u5,
+    funct3: u3,
+    rs1: u5,
+    rs2: u5,
+    imm11_5: u7,
+};
+
+fn decodeStoreImmediate(raw: RawInstructionTypeS) i12 {
+    const bits: u12 = (@as(u12, raw.imm11_5) << 5) | raw.imm4_0;
+    return @bitCast(bits);
+}
 
 const RawInstructionTypeShiftI = packed struct(u32) {
     opcode: u7,
@@ -436,22 +607,13 @@ const RawInstructionTypeR = packed struct(u32) {
     rs1: u5,
     rs2: u5,
     funct7: u7,
-
-    pub fn format(self: RawInstructionTypeR, writer: *std.Io.Writer) !void {
-        try writer.print("RawInstructionTypeR {{ opcode: 0b{b:0>7}, rd: {d}, funct3: 0b{b:0>3}, rs1: {d}, rs2: {d}, funct7: 0b{b:0>7} }}", .{
-            self.opcode,
-            self.rd,
-            self.funct3,
-            self.rs1,
-            self.rs2,
-            self.funct7,
-        });
-    }
 };
 
 const OpCode = enum(u7) {
     op_imm = 0b0010011,
     op_reg = 0b0110011,
+    load = 0b0000011,
+    store = 0b0100011,
     _,
 };
 
@@ -656,6 +818,75 @@ fn decode(instruction: u32) !Instruction {
                 },
             }
         },
+        .load => {
+            const raw: RawInstructionTypeI = @bitCast(instruction);
+            switch (raw.funct3) {
+                0b010 => {
+                    return .{ .lw = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
+                0b000 => {
+                    return .{ .lb = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
+                0b100 => {
+                    return .{ .lbu = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
+                0b001 => {
+                    return .{ .lh = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
+                0b101 => {
+                    return .{ .lhu = .{
+                        .rd = @enumFromInt(raw.rd),
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .imm = raw.imm,
+                    } };
+                },
+                else => return error.UnsupportedInstruction,
+            }
+        },
+        .store => {
+            const raw: RawInstructionTypeS = @bitCast(instruction);
+            const imm = decodeStoreImmediate(raw);
+            switch (raw.funct3) {
+                0b010 => {
+                    return .{ .sw = .{
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .rs2 = @enumFromInt(raw.rs2),
+                        .imm = imm,
+                    } };
+                },
+                0b000 => {
+                    return .{ .sb = .{
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .rs2 = @enumFromInt(raw.rs2),
+                        .imm = imm,
+                    } };
+                },
+                0b001 => {
+                    return .{ .sh = .{
+                        .rs1 = @enumFromInt(raw.rs1),
+                        .rs2 = @enumFromInt(raw.rs2),
+                        .imm = imm,
+                    } };
+                },
+                else => return error.UnsupportedInstruction,
+            }
+        },
         else => return error.UnsupportedOpcode,
     }
 }
@@ -682,6 +913,11 @@ pub fn main() !void {
         0x00209933, // sll  x18, x1, x2
         0x002759b3, // srl  x19, x14, x2
         0x40275a33, // sra  x20, x14, x2
+        0x08000a93, // addi x21, x0, 128
+        0x00eaa223, // sw   x14, 4(x21)
+        0x004aab03, // lw   x22, 4(x21)
+        0xfedaae23, // sw   x13, -4(x21)
+        0xffcaab83, // lw   x23, -4(x21)
     };
 
     var buf: [words.len * 4]u8 = undefined;

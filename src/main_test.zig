@@ -1,15 +1,19 @@
 const std = @import("std");
 const Cpu = @import("main.zig").Cpu;
 
-fn executeWords(comptime words: []const u32) !Cpu {
+fn loadWords(cpu: *Cpu, address: u32, comptime words: []const u32) !void {
     var program: [words.len * @sizeOf(u32)]u8 = undefined;
 
     for (words, 0..) |word, i| {
         std.mem.writeInt(u32, program[i * 4 ..][0..4], word, .little);
     }
 
+    try cpu.loadProgramAt(address, &program);
+}
+
+fn executeWords(comptime words: []const u32) !Cpu {
     var cpu = Cpu{};
-    try cpu.loadProgramAt(0, &program);
+    try loadWords(&cpu, 0, words);
     try cpu.run(words.len);
     return cpu;
 }
@@ -40,6 +44,11 @@ test "executes the complete supported instruction program" {
         0x0015bb33, // sltu x22, x11, x1
         0x0005ab93, // slti x23, x11, 0
         0xfff03c13, // sltiu x24, x0, -1
+        0x10000c93, // addi x25, x0, 256
+        0x00eca223, // sw   x14, 4(x25)
+        0x004cad03, // lw   x26, 4(x25)
+        0xfedcae23, // sw   x13, -4(x25)
+        0xffccad83, // lw   x27, -4(x25)
     });
 
     const expected = [_]u32{
@@ -68,10 +77,15 @@ test "executes the complete supported instruction program" {
         0,
         1,
         1,
+        256,
+        0xffff_ffaa,
+        0x55,
     };
 
     try std.testing.expectEqualSlices(u32, &expected, cpu.regs[0..expected.len]);
-    try std.testing.expectEqual(@as(u32, 24 * 4), cpu.pc);
+    try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xff, 0xff, 0xff }, cpu.memory[260..264]);
+    try std.testing.expectEqualSlices(u8, &.{ 0x55, 0, 0, 0 }, cpu.memory[252..256]);
+    try std.testing.expectEqual(@as(u32, 29 * 4), cpu.pc);
 }
 
 test "run executes exactly the requested number of instructions" {
@@ -276,6 +290,222 @@ test "sltiu sign-extends its immediate then compares as unsigned" {
     try std.testing.expectEqual(@as(u32, 1), cpu.regs[2]);
     try std.testing.expectEqual(@as(u32, 0), cpu.regs[3]);
     try std.testing.expectEqual(@as(u32, 1), cpu.regs[4]);
+}
+
+test "sw and lw round-trip a word in little-endian order" {
+    const cpu = try executeWords(&.{
+        0x10000093, // addi x1, x0, 256
+        0xfaa00113, // addi x2, x0, -86
+        0x0020a223, // sw   x2, 4(x1)
+        0x0040a183, // lw   x3, 4(x1)
+    });
+
+    try std.testing.expectEqual(@as(u32, 0xffff_ffaa), cpu.regs[3]);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0xaa, 0xff, 0xff, 0xff },
+        cpu.memory[260..264],
+    );
+}
+
+test "sw and lw sign-extend a negative offset" {
+    const cpu = try executeWords(&.{
+        0x10400093, // addi x1, x0, 260
+        0x05500113, // addi x2, x0, 0x55
+        0xfe20ae23, // sw   x2, -4(x1)
+        0xffc0a183, // lw   x3, -4(x1)
+    });
+
+    try std.testing.expectEqual(@as(u32, 0x55), cpu.regs[3]);
+    try std.testing.expectEqualSlices(u8, &.{ 0x55, 0, 0, 0 }, cpu.memory[256..260]);
+}
+
+test "lw targeting x0 does not change x0" {
+    const cpu = try executeWords(&.{
+        0x10000093, // addi x1, x0, 256
+        0x02a00113, // addi x2, x0, 42
+        0x0020a023, // sw   x2, 0(x1)
+        0x0000a003, // lw   x0, 0(x1)
+    });
+
+    try std.testing.expectEqual(@as(u32, 0), cpu.regs[0]);
+    try std.testing.expectEqualSlices(u8, &.{ 42, 0, 0, 0 }, cpu.memory[256..260]);
+}
+
+test "lb sign-extends while lbu zero-extends" {
+    const cpu = try executeWords(&.{
+        0x10000093, // addi x1, x0, 256
+        0x08000113, // addi x2, x0, 0x80
+        0x00208023, // sb   x2, 0(x1)
+        0x00008183, // lb   x3, 0(x1)
+        0x0000c203, // lbu  x4, 0(x1)
+    });
+
+    try std.testing.expectEqual(@as(u32, 0xffff_ff80), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0x80), cpu.regs[4]);
+}
+
+test "lh sign-extends while lhu zero-extends" {
+    const cpu = try executeWords(&.{
+        0x10000093, // addi x1, x0, 256
+        0x00100113, // addi x2, x0, 1
+        0x00f11113, // slli x2, x2, 15
+        0x00209023, // sh   x2, 0(x1)
+        0x00009183, // lh   x3, 0(x1)
+        0x0000d203, // lhu  x4, 0(x1)
+    });
+
+    try std.testing.expectEqual(@as(u32, 0xffff_8000), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0x8000), cpu.regs[4]);
+}
+
+test "sb stores only the low byte and permits odd addresses" {
+    var cpu = Cpu{};
+    try loadWords(&cpu, 0, &.{0x00208023}); // sb x2, 0(x1)
+    cpu.regs[1] = 257;
+    cpu.regs[2] = 0xdead_be80;
+    cpu.memory[256..260].* = .{ 0x11, 0x22, 0x33, 0x44 };
+
+    try cpu.run(1);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0x11, 0x80, 0x33, 0x44 },
+        cpu.memory[256..260],
+    );
+}
+
+test "sh stores only the low halfword in little-endian order" {
+    var cpu = Cpu{};
+    try loadWords(&cpu, 0, &.{
+        0x00209023, // sh  x2, 0(x1)
+        0x0000d183, // lhu x3, 0(x1)
+    });
+    cpu.regs[1] = 256;
+    cpu.regs[2] = 0x1234_abcd;
+    cpu.memory[256..260].* = .{ 0x11, 0x22, 0x33, 0x44 };
+
+    try cpu.run(2);
+
+    try std.testing.expectEqual(@as(u32, 0xabcd), cpu.regs[3]);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0xcd, 0xab, 0x33, 0x44 },
+        cpu.memory[256..260],
+    );
+}
+
+test "byte and halfword accesses sign-extend negative offsets" {
+    const cpu = try executeWords(&.{
+        0x10400093, // addi x1, x0, 260
+        0x08000113, // addi x2, x0, 0x80
+        0xfe208fa3, // sb   x2, -1(x1)
+        0xfff08183, // lb   x3, -1(x1)
+        0x00100213, // addi x4, x0, 1
+        0x00f21213, // slli x4, x4, 15
+        0xfe409e23, // sh   x4, -4(x1)
+        0xffc09283, // lh   x5, -4(x1)
+    });
+
+    try std.testing.expectEqual(@as(u32, 0xffff_ff80), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0xffff_8000), cpu.regs[5]);
+    try std.testing.expectEqual(@as(u8, 0x80), cpu.memory[259]);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0x80 }, cpu.memory[256..258]);
+}
+
+test "byte and halfword accesses work at the end of memory" {
+    var byte_cpu = Cpu{};
+    try loadWords(&byte_cpu, 0, &.{
+        0x00208023, // sb  x2, 0(x1)
+        0x0000c183, // lbu x3, 0(x1)
+    });
+    byte_cpu.regs[1] = @intCast(byte_cpu.memory.len - 1);
+    byte_cpu.regs[2] = 0xab;
+    try byte_cpu.run(2);
+    try std.testing.expectEqual(@as(u32, 0xab), byte_cpu.regs[3]);
+    try std.testing.expectEqual(@as(u8, 0xab), byte_cpu.memory[byte_cpu.memory.len - 1]);
+
+    var half_cpu = Cpu{};
+    try loadWords(&half_cpu, 0, &.{
+        0x00209023, // sh  x2, 0(x1)
+        0x0000d183, // lhu x3, 0(x1)
+    });
+    half_cpu.regs[1] = @intCast(half_cpu.memory.len - 2);
+    half_cpu.regs[2] = 0xbeef;
+    try half_cpu.run(2);
+    try std.testing.expectEqual(@as(u32, 0xbeef), half_cpu.regs[3]);
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0xef, 0xbe },
+        half_cpu.memory[half_cpu.memory.len - 2 ..],
+    );
+}
+
+test "unaligned lh lhu and sh fail without advancing pc" {
+    var lh_cpu = Cpu{};
+    try loadWords(&lh_cpu, 0, &.{0x00009103}); // lh x2, 0(x1)
+    lh_cpu.regs[1] = 257;
+    try std.testing.expectError(error.UnalignedAccess, lh_cpu.run(1));
+    try std.testing.expectEqual(@as(u32, 0), lh_cpu.pc);
+
+    var lhu_cpu = Cpu{};
+    try loadWords(&lhu_cpu, 0, &.{0x0000d103}); // lhu x2, 0(x1)
+    lhu_cpu.regs[1] = 257;
+    try std.testing.expectError(error.UnalignedAccess, lhu_cpu.run(1));
+    try std.testing.expectEqual(@as(u32, 0), lhu_cpu.pc);
+
+    var sh_cpu = Cpu{};
+    try loadWords(&sh_cpu, 0, &.{0x00209023}); // sh x2, 0(x1)
+    sh_cpu.regs[1] = 257;
+    sh_cpu.regs[2] = 0xbeef;
+    const before = sh_cpu.memory[256..260].*;
+    try std.testing.expectError(error.UnalignedAccess, sh_cpu.run(1));
+    try std.testing.expectEqual(@as(u32, 0), sh_cpu.pc);
+    try std.testing.expectEqualSlices(u8, &before, sh_cpu.memory[256..260]);
+}
+
+test "unaligned lw and sw fail without advancing pc" {
+    var load_cpu = Cpu{};
+    try loadWords(&load_cpu, 0, &.{
+        0x10100093, // addi x1, x0, 257
+        0x0000a103, // lw   x2, 0(x1)
+    });
+    try load_cpu.run(1);
+    try std.testing.expectError(error.UnalignedAccess, load_cpu.run(1));
+    try std.testing.expectEqual(@as(u32, 4), load_cpu.pc);
+
+    var store_cpu = Cpu{};
+    try loadWords(&store_cpu, 0, &.{
+        0x10100093, // addi x1, x0, 257
+        0x02a00113, // addi x2, x0, 42
+        0x0020a023, // sw   x2, 0(x1)
+    });
+    try store_cpu.run(2);
+    try std.testing.expectError(error.UnalignedAccess, store_cpu.run(1));
+    try std.testing.expectEqual(@as(u32, 8), store_cpu.pc);
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0 }, store_cpu.memory[257..261]);
+}
+
+test "out-of-bounds lw and sw fail without advancing pc or writing memory" {
+    var load_cpu = Cpu{};
+    try loadWords(&load_cpu, 0, &.{0x0000a103}); // lw x2, 0(x1)
+    load_cpu.regs[1] = @intCast(load_cpu.memory.len);
+    try std.testing.expectError(error.OutOfBounds, load_cpu.run(1));
+    try std.testing.expectEqual(@as(u32, 0), load_cpu.pc);
+
+    var store_cpu = Cpu{};
+    try loadWords(&store_cpu, 0, &.{0x0020a023}); // sw x2, 0(x1)
+    store_cpu.regs[1] = @intCast(store_cpu.memory.len);
+    store_cpu.regs[2] = 0xdead_beef;
+    const tail_before = store_cpu.memory[store_cpu.memory.len - 4 ..].*;
+
+    try std.testing.expectError(error.OutOfBounds, store_cpu.run(1));
+    try std.testing.expectEqual(@as(u32, 0), store_cpu.pc);
+    try std.testing.expectEqualSlices(
+        u8,
+        &tail_before,
+        store_cpu.memory[store_cpu.memory.len - 4 ..],
+    );
 }
 
 test "fetching an instruction beyond memory returns OutOfBounds" {
