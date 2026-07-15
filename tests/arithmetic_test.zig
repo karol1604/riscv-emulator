@@ -1,61 +1,13 @@
 const std = @import("std");
-const Cpu = @import("main.zig").Cpu;
+const Cpu = @import("cpu").Cpu;
+const helpers = @import("helpers.zig");
 
-fn loadWords(cpu: *Cpu, address: u32, comptime words: []const u32) !void {
-    var program: [words.len * @sizeOf(u32)]u8 = undefined;
-
-    for (words, 0..) |word, i| {
-        std.mem.writeInt(u32, program[i * 4 ..][0..4], word, .little);
-    }
-
-    try cpu.loadProgramAt(address, &program);
-}
-
-fn executeWords(comptime words: []const u32) !Cpu {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, words);
-    try cpu.run(words.len);
-    return cpu;
-}
-
-fn encodeBranch(comptime funct3: u3, comptime offset: i13) u32 {
-    const imm: u13 = @bitCast(offset);
-    return 0b1100011 |
-        (@as(u32, (imm >> 11) & 0x1) << 7) |
-        (@as(u32, (imm >> 1) & 0xf) << 8) |
-        (@as(u32, funct3) << 12) |
-        (@as(u32, 1) << 15) |
-        (@as(u32, 2) << 20) |
-        (@as(u32, (imm >> 5) & 0x3f) << 25) |
-        (@as(u32, (imm >> 12) & 0x1) << 31);
-}
-
-fn branchPc(comptime funct3: u3, lhs: u32, rhs: u32) !u32 {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{encodeBranch(funct3, 8)});
-    cpu.regs[1] = lhs;
-    cpu.regs[2] = rhs;
-    try cpu.run(1);
-    return cpu.pc;
-}
-
-fn encodeJal(comptime rd: u5, comptime offset: i21) u32 {
-    const imm: u21 = @bitCast(offset);
-    return 0b1101111 |
-        (@as(u32, rd) << 7) |
-        (@as(u32, (imm >> 12) & 0xff) << 12) |
-        (@as(u32, (imm >> 11) & 0x1) << 20) |
-        (@as(u32, (imm >> 1) & 0x3ff) << 21) |
-        (@as(u32, (imm >> 20) & 0x1) << 31);
-}
-
-fn encodeJalr(comptime rd: u5, comptime rs1: u5, comptime offset: i12) u32 {
-    const imm: u12 = @bitCast(offset);
-    return (@as(u32, imm) << 20) |
-        (@as(u32, rs1) << 15) |
-        (@as(u32, rd) << 7) |
-        0b1100111;
-}
+const loadWords = helpers.loadWords;
+const executeWords = helpers.executeWords;
+const encodeBranch = helpers.encodeBranch;
+const branchPc = helpers.branchPc;
+const encodeJal = helpers.encodeJal;
+const encodeJalr = helpers.encodeJalr;
 
 test "executes the complete supported instruction program" {
     const cpu = try executeWords(&.{
@@ -148,32 +100,6 @@ test "run executes exactly the requested number of instructions" {
     try cpu.run(1);
     try std.testing.expectEqual(@as(u32, 7), cpu.regs[2]);
     try std.testing.expectEqual(@as(u32, 8), cpu.pc);
-}
-
-test "program can be loaded and executed at a nonzero address" {
-    var program: [4]u8 = undefined;
-    std.mem.writeInt(u32, &program, 0x00700093, .little); // addi x1, x0, 7
-
-    var cpu = Cpu{};
-    try cpu.loadProgramAt(16, &program);
-    cpu.pc = 16;
-    try cpu.run(1);
-
-    try std.testing.expectEqual(@as(u32, 7), cpu.regs[1]);
-    try std.testing.expectEqual(@as(u32, 20), cpu.pc);
-}
-
-test "out-of-range program load fails without modifying memory" {
-    var cpu = Cpu{};
-    const program = [_]u8{ 1, 2, 3, 4 };
-    const address: u32 = @intCast(cpu.memory.len - 2);
-
-    try std.testing.expectError(error.OutOfBounds, cpu.loadProgramAt(address, &program));
-    try std.testing.expectEqualSlices(
-        u8,
-        &.{ 0, 0 },
-        cpu.memory[cpu.memory.len - 2 ..],
-    );
 }
 
 test "x0 remains zero and reads as zero" {
@@ -331,156 +257,6 @@ test "sltiu sign-extends its immediate then compares as unsigned" {
     try std.testing.expectEqual(@as(u32, 1), cpu.regs[4]);
 }
 
-test "beq branches only when registers are equal" {
-    try std.testing.expectEqual(@as(u32, 8), try branchPc(0b000, 5, 5));
-    try std.testing.expectEqual(@as(u32, 4), try branchPc(0b000, 5, 6));
-}
-
-test "bne branches only when registers are different" {
-    try std.testing.expectEqual(@as(u32, 8), try branchPc(0b001, 5, 6));
-    try std.testing.expectEqual(@as(u32, 4), try branchPc(0b001, 5, 5));
-}
-
-test "blt compares registers as signed values" {
-    try std.testing.expectEqual(@as(u32, 8), try branchPc(0b100, 0xffff_ffff, 1));
-    try std.testing.expectEqual(@as(u32, 4), try branchPc(0b100, 1, 0xffff_ffff));
-}
-
-test "bge compares registers as signed values" {
-    try std.testing.expectEqual(@as(u32, 8), try branchPc(0b101, 1, 0xffff_ffff));
-    try std.testing.expectEqual(@as(u32, 4), try branchPc(0b101, 0xffff_ffff, 1));
-}
-
-test "bltu compares registers as unsigned values" {
-    try std.testing.expectEqual(@as(u32, 8), try branchPc(0b110, 1, 0xffff_ffff));
-    try std.testing.expectEqual(@as(u32, 4), try branchPc(0b110, 0xffff_ffff, 1));
-}
-
-test "bgeu compares registers as unsigned values" {
-    try std.testing.expectEqual(@as(u32, 8), try branchPc(0b111, 0xffff_ffff, 1));
-    try std.testing.expectEqual(@as(u32, 4), try branchPc(0b111, 1, 0xffff_ffff));
-}
-
-test "taken branch uses a sign-extended PC-relative offset" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 4, &.{encodeBranch(0b001, -4)}); // bne x1, x2, -4
-    cpu.pc = 4;
-    cpu.regs[1] = 1;
-    cpu.regs[2] = 2;
-
-    try cpu.run(1);
-    try std.testing.expectEqual(@as(u32, 0), cpu.pc);
-}
-
-test "misaligned target faults only when branch is taken" {
-    var taken = Cpu{};
-    try loadWords(&taken, 0, &.{encodeBranch(0b000, 2)});
-    taken.regs[1] = 5;
-    taken.regs[2] = 5;
-    try std.testing.expectError(error.UnalignedAccess, taken.run(1));
-    try std.testing.expectEqual(@as(u32, 0), taken.pc);
-
-    var not_taken = Cpu{};
-    try loadWords(&not_taken, 0, &.{encodeBranch(0b000, 2)});
-    not_taken.regs[1] = 5;
-    not_taken.regs[2] = 6;
-    try not_taken.run(1);
-    try std.testing.expectEqual(@as(u32, 4), not_taken.pc);
-}
-
-test "jal writes the return address and jumps PC-relative" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{encodeJal(5, 8)});
-
-    try cpu.run(1);
-
-    try std.testing.expectEqual(@as(u32, 4), cpu.regs[5]);
-    try std.testing.expectEqual(@as(u32, 8), cpu.pc);
-}
-
-test "jal sign-extends a negative offset" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 8, &.{encodeJal(5, -8)});
-    cpu.pc = 8;
-
-    try cpu.run(1);
-
-    try std.testing.expectEqual(@as(u32, 12), cpu.regs[5]);
-    try std.testing.expectEqual(@as(u32, 0), cpu.pc);
-}
-
-test "jal targeting x0 jumps without changing x0" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{encodeJal(0, 8)});
-
-    try cpu.run(1);
-
-    try std.testing.expectEqual(@as(u32, 0), cpu.regs[0]);
-    try std.testing.expectEqual(@as(u32, 8), cpu.pc);
-}
-
-test "misaligned jal target preserves PC and destination register" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{encodeJal(5, 2)});
-    cpu.regs[5] = 0xdead_beef;
-
-    try std.testing.expectError(error.UnalignedAccess, cpu.run(1));
-    try std.testing.expectEqual(@as(u32, 0), cpu.pc);
-    try std.testing.expectEqual(@as(u32, 0xdead_beef), cpu.regs[5]);
-}
-
-test "jalr writes the return address and clears target bit zero" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{encodeJalr(5, 1, 0)});
-    cpu.regs[1] = 9;
-
-    try cpu.run(1);
-
-    try std.testing.expectEqual(@as(u32, 4), cpu.regs[5]);
-    try std.testing.expectEqual(@as(u32, 8), cpu.pc);
-}
-
-test "jalr sign-extends its immediate" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{encodeJalr(5, 1, -4)});
-    cpu.regs[1] = 12;
-
-    try cpu.run(1);
-
-    try std.testing.expectEqual(@as(u32, 4), cpu.regs[5]);
-    try std.testing.expectEqual(@as(u32, 8), cpu.pc);
-}
-
-test "jalr reads its base before writing the same register" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{encodeJalr(1, 1, 0)});
-    cpu.regs[1] = 8;
-
-    try cpu.run(1);
-
-    try std.testing.expectEqual(@as(u32, 4), cpu.regs[1]);
-    try std.testing.expectEqual(@as(u32, 8), cpu.pc);
-}
-
-test "misaligned jalr target preserves PC and destination register" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{encodeJalr(5, 1, 0)});
-    cpu.regs[1] = 6;
-    cpu.regs[5] = 0xdead_beef;
-
-    try std.testing.expectError(error.UnalignedAccess, cpu.run(1));
-    try std.testing.expectEqual(@as(u32, 0), cpu.pc);
-    try std.testing.expectEqual(@as(u32, 0xdead_beef), cpu.regs[5]);
-}
-
-test "jalr rejects nonzero funct3" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{encodeJalr(5, 1, 0) | (@as(u32, 1) << 12)});
-
-    try std.testing.expectError(error.UnsupportedInstruction, cpu.run(1));
-    try std.testing.expectEqual(@as(u32, 0), cpu.pc);
-}
-
 test "sw and lw round-trip a word in little-endian order" {
     const cpu = try executeWords(&.{
         0x10000093, // addi x1, x0, 256
@@ -519,69 +295,6 @@ test "lw targeting x0 does not change x0" {
 
     try std.testing.expectEqual(@as(u32, 0), cpu.regs[0]);
     try std.testing.expectEqualSlices(u8, &.{ 42, 0, 0, 0 }, cpu.memory[256..260]);
-}
-
-test "lb sign-extends while lbu zero-extends" {
-    const cpu = try executeWords(&.{
-        0x10000093, // addi x1, x0, 256
-        0x08000113, // addi x2, x0, 0x80
-        0x00208023, // sb   x2, 0(x1)
-        0x00008183, // lb   x3, 0(x1)
-        0x0000c203, // lbu  x4, 0(x1)
-    });
-
-    try std.testing.expectEqual(@as(u32, 0xffff_ff80), cpu.regs[3]);
-    try std.testing.expectEqual(@as(u32, 0x80), cpu.regs[4]);
-}
-
-test "lh sign-extends while lhu zero-extends" {
-    const cpu = try executeWords(&.{
-        0x10000093, // addi x1, x0, 256
-        0x00100113, // addi x2, x0, 1
-        0x00f11113, // slli x2, x2, 15
-        0x00209023, // sh   x2, 0(x1)
-        0x00009183, // lh   x3, 0(x1)
-        0x0000d203, // lhu  x4, 0(x1)
-    });
-
-    try std.testing.expectEqual(@as(u32, 0xffff_8000), cpu.regs[3]);
-    try std.testing.expectEqual(@as(u32, 0x8000), cpu.regs[4]);
-}
-
-test "sb stores only the low byte and permits odd addresses" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{0x00208023}); // sb x2, 0(x1)
-    cpu.regs[1] = 257;
-    cpu.regs[2] = 0xdead_be80;
-    cpu.memory[256..260].* = .{ 0x11, 0x22, 0x33, 0x44 };
-
-    try cpu.run(1);
-
-    try std.testing.expectEqualSlices(
-        u8,
-        &.{ 0x11, 0x80, 0x33, 0x44 },
-        cpu.memory[256..260],
-    );
-}
-
-test "sh stores only the low halfword in little-endian order" {
-    var cpu = Cpu{};
-    try loadWords(&cpu, 0, &.{
-        0x00209023, // sh  x2, 0(x1)
-        0x0000d183, // lhu x3, 0(x1)
-    });
-    cpu.regs[1] = 256;
-    cpu.regs[2] = 0x1234_abcd;
-    cpu.memory[256..260].* = .{ 0x11, 0x22, 0x33, 0x44 };
-
-    try cpu.run(2);
-
-    try std.testing.expectEqual(@as(u32, 0xabcd), cpu.regs[3]);
-    try std.testing.expectEqualSlices(
-        u8,
-        &.{ 0xcd, 0xab, 0x33, 0x44 },
-        cpu.memory[256..260],
-    );
 }
 
 test "byte and halfword accesses sign-extend negative offsets" {
@@ -653,59 +366,6 @@ test "unaligned lh lhu and sh fail without advancing pc" {
     try std.testing.expectEqualSlices(u8, &before, sh_cpu.memory[256..260]);
 }
 
-test "unaligned lw and sw fail without advancing pc" {
-    var load_cpu = Cpu{};
-    try loadWords(&load_cpu, 0, &.{
-        0x10100093, // addi x1, x0, 257
-        0x0000a103, // lw   x2, 0(x1)
-    });
-    try load_cpu.run(1);
-    try std.testing.expectError(error.UnalignedAccess, load_cpu.run(1));
-    try std.testing.expectEqual(@as(u32, 4), load_cpu.pc);
-
-    var store_cpu = Cpu{};
-    try loadWords(&store_cpu, 0, &.{
-        0x10100093, // addi x1, x0, 257
-        0x02a00113, // addi x2, x0, 42
-        0x0020a023, // sw   x2, 0(x1)
-    });
-    try store_cpu.run(2);
-    try std.testing.expectError(error.UnalignedAccess, store_cpu.run(1));
-    try std.testing.expectEqual(@as(u32, 8), store_cpu.pc);
-    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0 }, store_cpu.memory[257..261]);
-}
-
-test "out-of-bounds lw and sw fail without advancing pc or writing memory" {
-    var load_cpu = Cpu{};
-    try loadWords(&load_cpu, 0, &.{0x0000a103}); // lw x2, 0(x1)
-    load_cpu.regs[1] = @intCast(load_cpu.memory.len);
-    try std.testing.expectError(error.OutOfBounds, load_cpu.run(1));
-    try std.testing.expectEqual(@as(u32, 0), load_cpu.pc);
-
-    var store_cpu = Cpu{};
-    try loadWords(&store_cpu, 0, &.{0x0020a023}); // sw x2, 0(x1)
-    store_cpu.regs[1] = @intCast(store_cpu.memory.len);
-    store_cpu.regs[2] = 0xdead_beef;
-    const tail_before = store_cpu.memory[store_cpu.memory.len - 4 ..].*;
-
-    try std.testing.expectError(error.OutOfBounds, store_cpu.run(1));
-    try std.testing.expectEqual(@as(u32, 0), store_cpu.pc);
-    try std.testing.expectEqualSlices(
-        u8,
-        &tail_before,
-        store_cpu.memory[store_cpu.memory.len - 4 ..],
-    );
-}
-
-test "fetching an instruction beyond memory returns OutOfBounds" {
-    var cpu = Cpu{};
-    cpu.pc = @intCast(cpu.memory.len - 3);
-
-    const initial_pc = cpu.pc;
-    try std.testing.expectError(error.OutOfBounds, cpu.run(1));
-    try std.testing.expectEqual(initial_pc, cpu.pc);
-}
-
 test "unsupported opcode is rejected without advancing pc" {
     var cpu = Cpu{};
     const program = [_]u8{ 0xff, 0xff, 0xff, 0xff };
@@ -733,4 +393,31 @@ test "unsupported shift-immediate funct7 is rejected without advancing pc" {
 
     try std.testing.expectError(error.UnsupportedInstruction, cpu.run(1));
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
+}
+
+test "lui places the immediate in the upper 20 bits" {
+    const cpu = try executeWords(&.{
+        0x123450b7, // lui x1, 0x12345
+        0x80000137, // lui x2, 0x80000
+        0xfffff037, // lui x0, 0xfffff (write must be ignored)
+    });
+
+    try std.testing.expectEqual(@as(u32, 0x1234_5000), cpu.regs[1]);
+    try std.testing.expectEqual(@as(u32, 0x8000_0000), cpu.regs[2]);
+    try std.testing.expectEqual(@as(u32, 0), cpu.regs[0]);
+}
+
+test "auipc adds the upper immediate to its instruction address" {
+    var cpu = Cpu{};
+    try loadWords(&cpu, 0x100, &.{
+        0x12345097, // auipc x1, 0x12345
+        0xfffff117, // auipc x2, 0xfffff
+    });
+    cpu.pc = 0x100;
+
+    try cpu.run(2);
+
+    try std.testing.expectEqual(@as(u32, 0x1234_5100), cpu.regs[1]);
+    try std.testing.expectEqual(@as(u32, 0xffff_f104), cpu.regs[2]);
+    try std.testing.expectEqual(@as(u32, 0x108), cpu.pc);
 }

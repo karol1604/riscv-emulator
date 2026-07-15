@@ -16,6 +16,12 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    const cpu_module = b.createModule(.{
+        .root_source_file = b.path("src/cpu.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -60,11 +66,7 @@ pub fn build(b: *std.Build) void {
             // List of modules available for import in source files part of the
             // root module.
             .imports = &.{
-                // Here "riscv_emulator" is the name you will use in your source code to
-                // import this module (e.g. `@import("riscv_emulator")`). The name is
-                // repeated because you are allowed to rename your imports, which
-                // can be extremely useful in case of collisions (which can happen
-                // importing modules from different packages).
+                .{ .name = "cpu", .module = cpu_module },
             },
         }),
     });
@@ -101,13 +103,15 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    // Compile the dedicated test module. It imports the emulator implementation
-    // from src/main.zig and exercises it through its public API.
+    // Compile the dedicated test suites against the CPU module's public API.
     const exe_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main_test.zig"),
+            .root_source_file = b.path("tests/all_test.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "cpu", .module = cpu_module },
+            },
         }),
     });
 
