@@ -7,7 +7,7 @@ const Instruction = instruction.Instruction;
 const decode = instruction.decode;
 
 pub const Cpu = struct {
-    const memory_size = 128 * 1024;
+    pub const memory_size = 128 * 1024;
     regs: [32]u32 = .{0} ** 32,
     /// Program counter
     pc: u32 = 0,
@@ -30,6 +30,11 @@ pub const Cpu = struct {
             };
         }
         return error.InstructionLimitExceeded;
+    }
+
+    pub fn zeroOutMemory(self: *Cpu, start: usize, end: usize) void {
+        if (start > end or end > self.memory.len) return;
+        @memset(self.memory[start..end], 0);
     }
 
     pub fn dumpRegisters(self: *const Cpu) void {

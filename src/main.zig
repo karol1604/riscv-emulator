@@ -139,6 +139,16 @@ pub fn main(init: std.process.Init) !void {
 
     const elf_header = try elf.parseELFHeader(elf_data);
     std.debug.print("\n elf header: {any}\n", .{elf_header});
+
+    const elf_program_headers = try elf.parseProgramHeaders(allocator, elf_data, elf_header);
+    defer allocator.free(elf_program_headers);
+
+    var cpu_elf = Cpu{};
+    try elf.loadElfIntoCpu(allocator, &cpu_elf, elf_data);
+
+    std.debug.print("\n=== ELF file demo ===\n", .{});
+    try cpu_elf.runUntilHalt(1000);
+    cpu_elf.dumpRegisters();
 }
 
 fn toBytes(words: []const u32, bytes: []u8) []u8 {
