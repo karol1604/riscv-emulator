@@ -47,6 +47,14 @@ pub const Cpu = struct {
         return self.memory[start..][0..length];
     }
 
+    pub fn getBytesMut(self: *Cpu, address: u32, length: usize) ![]u8 {
+        const start: usize = @intCast(address);
+        if (start > self.memory.len or length > self.memory.len - start) {
+            return error.OutOfBounds;
+        }
+        return self.memory[start..][0..length];
+    }
+
     pub fn zeroOutMemory(self: *Cpu, start: usize, end: usize) void {
         if (start > end or end > self.memory.len) return;
         @memset(self.memory[start..end], 0);
@@ -71,9 +79,9 @@ pub const Cpu = struct {
         const raw = try self.fetchInstruction();
         const instr = try decode(raw);
 
-        if (!builtin.is_test) {
-            std.debug.print("0x{x:0>8}: {f}\n", .{ self.pc, instr });
-        }
+        // if (!builtin.is_test) {
+        //     std.debug.print("0x{x:0>8}: {f}\n", .{ self.pc, instr });
+        // }
 
         self.pc +%= 4; // increment before execution to handle branches correctly
         errdefer self.pc = instruction_pc;

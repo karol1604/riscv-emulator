@@ -6,8 +6,11 @@ const host_mod = @import("host.zig");
 const Host = host_mod.Host;
 
 pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+
     var stdout_buffer: [4096]u8 = undefined;
     var stderr_buffer: [4096]u8 = undefined;
+    var stdin_buffer: [4096]u8 = undefined;
 
     var stdout = std.Io.File.stdout().writerStreaming(
         init.io,
@@ -21,9 +24,12 @@ pub fn main(init: std.process.Init) !void {
     );
     defer stderr.flush() catch {};
 
+    var stdin = std.Io.File.stdin().readerStreaming(io, &stdin_buffer);
+
     var host = Host.init(
         &stdout.interface,
         &stderr.interface,
+        &stdin.interface,
     );
 
     std.debug.print("=== Instruction demo ===\n", .{});
@@ -140,8 +146,6 @@ pub fn main(init: std.process.Init) !void {
 
     const allocator = debug_allocator.allocator();
 
-    const io = init.io;
-
     const file = try std.Io.Dir.cwd().openFile(io, "programs/program5.bin", .{});
     defer file.close(io);
 
@@ -187,6 +191,26 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("\n=== Write syscall demo ===\n", .{});
     const write_demo_result = try host.run(&write_demo_cpu, 100);
     std.log.info("{f}\n", .{write_demo_result});
+
+    const c_demo = try elf.loadElf(io, allocator, "programs/c-syscall-demo.elf");
+    defer allocator.free(c_demo);
+
+    var c_demo_cpu = Cpu{};
+    try elf.loadElfIntoCpu(allocator, &c_demo_cpu, c_demo);
+
+    std.debug.print("\n=== Freestanding C syscall demo ===\n", .{});
+    const c_demo_result = try host.run(&c_demo_cpu, 10_000);
+    std.log.info("{f}\n", .{c_demo_result});
+
+    const read_demo = try elf.loadElf(io, allocator, "programs/read-demo.elf");
+    defer allocator.free(read_demo);
+
+    var read_demo_cpu = Cpu{};
+    try elf.loadElfIntoCpu(allocator, &read_demo_cpu, read_demo);
+
+    std.debug.print("\n=== Interactive read syscall demo ===\n", .{});
+    const read_demo_result = try host.run(&read_demo_cpu, 10_000);
+    std.log.info("{f}\n", .{read_demo_result});
 }
 
 fn toBytes(words: []const u32, bytes: []u8) []u8 {

@@ -33,11 +33,13 @@ fn errno(code: ErrorCode) u32 {
 pub const Host = struct {
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
+    stdin: *std.Io.Reader,
 
-    pub fn init(stdout: *std.Io.Writer, stderr: *std.Io.Writer) Host {
+    pub fn init(stdout: *std.Io.Writer, stderr: *std.Io.Writer, stdin: *std.Io.Reader) Host {
         return .{
             .stdout = stdout,
             .stderr = stderr,
+            .stdin = stdin,
         };
     }
 
@@ -56,8 +58,47 @@ pub const Host = struct {
         return error.InstructionLimitExceeded;
     }
 
+    fn readIntoGuest(reader: *std.Io.Reader, guest_buffer: []u8) !usize {
+        if (guest_buffer.len == 0) {
+            return 0;
+        }
+
+        while (reader.bufferedLen() == 0) {
+            reader.fillMore() catch |err| switch (err) {
+                error.EndOfStream => return 0,
+                error.ReadFailed => return err,
+            };
+        }
+
+        const available = reader.buffered();
+        const count = @min(guest_buffer.len, available.len);
+
+        @memcpy(guest_buffer[0..count], available[0..count]);
+        reader.toss(count);
+
+        return count;
+    }
+
     pub fn handleSyscall(self: *Host, cpu: *Cpu, request: SyscallRequest) !SyscallResult {
         switch (request.number) {
+            63 => {
+                const fd = request.args[0];
+                const addr = request.args[1];
+                const len = request.args[2];
+
+                const reader = switch (fd) {
+                    0 => self.stdin,
+                    else => return .{ .returned = errno(.EBADF) },
+                };
+
+                const cpu_buffer = cpu.getBytesMut(addr, len) catch {
+                    return .{ .returned = errno(.EFAULT) };
+                };
+
+                const bytes_read = try readIntoGuest(reader, cpu_buffer);
+
+                return .{ .returned = @intCast(bytes_read) };
+            },
             64 => {
                 const fd = request.args[0];
                 const addr = request.args[1];

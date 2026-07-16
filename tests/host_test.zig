@@ -15,7 +15,8 @@ test "exit syscall returns the guest exit status" {
     var stderr_buffer: [1]u8 = undefined;
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
-    var host = Host.init(&stdout, &stderr);
+    var stdin: std.Io.Reader = .fixed("");
+    var host = Host.init(&stdout, &stderr, &stdin);
     const result = try host.run(&cpu, 3);
 
     switch (result) {
@@ -33,7 +34,8 @@ test "ebreak returns a breakpoint run result" {
     var stderr_buffer: [1]u8 = undefined;
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
-    var host = Host.init(&stdout, &stderr);
+    var stdin: std.Io.Reader = .fixed("");
+    var host = Host.init(&stdout, &stderr, &stdin);
     const result = try host.run(&cpu, 1);
 
     switch (result) {
@@ -51,7 +53,8 @@ test "host runner reports instruction limit exhaustion" {
     var stderr_buffer: [1]u8 = undefined;
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
-    var host = Host.init(&stdout, &stderr);
+    var stdin: std.Io.Reader = .fixed("");
+    var host = Host.init(&stdout, &stderr, &stdin);
     try std.testing.expectError(error.InstructionLimitExceeded, host.run(&cpu, 1));
     try std.testing.expectEqual(@as(u32, 1), cpu.regs[1]);
 }
@@ -65,7 +68,8 @@ test "write syscall sends guest memory to stdout and stderr" {
     var stderr_buffer: [64]u8 = undefined;
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
-    var host = Host.init(&stdout, &stderr);
+    var stdin: std.Io.Reader = .fixed("");
+    var host = Host.init(&stdout, &stderr, &stdin);
 
     const stdout_result = try host.handleSyscall(&cpu, .{
         .number = 64,
@@ -80,4 +84,62 @@ test "write syscall sends guest memory to stdout and stderr" {
     try std.testing.expectEqual(@as(u32, message.len), stderr_result.returned);
     try std.testing.expectEqualStrings(message, stdout.buffered());
     try std.testing.expectEqualStrings(message, stderr.buffered());
+}
+
+test "read syscall copies buffered stdin into guest memory and reaches EOF" {
+    var cpu = Cpu{};
+
+    var stdout_buffer: [1]u8 = undefined;
+    var stderr_buffer: [1]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buffer);
+    var stderr: std.Io.Writer = .fixed(&stderr_buffer);
+    var stdin: std.Io.Reader = .fixed("hello\n");
+    var host = Host.init(&stdout, &stderr, &stdin);
+
+    const zero_length = try host.handleSyscall(&cpu, .{
+        .number = 63,
+        .args = .{ 0, 0x100, 0, 0, 0, 0 },
+    });
+    const first = try host.handleSyscall(&cpu, .{
+        .number = 63,
+        .args = .{ 0, 0x100, 3, 0, 0, 0 },
+    });
+    const second = try host.handleSyscall(&cpu, .{
+        .number = 63,
+        .args = .{ 0, 0x110, 8, 0, 0, 0 },
+    });
+    const eof = try host.handleSyscall(&cpu, .{
+        .number = 63,
+        .args = .{ 0, 0x120, 8, 0, 0, 0 },
+    });
+
+    try std.testing.expectEqual(@as(u32, 0), zero_length.returned);
+    try std.testing.expectEqual(@as(u32, 3), first.returned);
+    try std.testing.expectEqual(@as(u32, 3), second.returned);
+    try std.testing.expectEqual(@as(u32, 0), eof.returned);
+    try std.testing.expectEqualStrings("hel", try cpu.getBytes(0x100, 3));
+    try std.testing.expectEqualStrings("lo\n", try cpu.getBytes(0x110, 3));
+}
+
+test "read syscall validates the descriptor and guest buffer" {
+    var cpu = Cpu{};
+
+    var stdout_buffer: [1]u8 = undefined;
+    var stderr_buffer: [1]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buffer);
+    var stderr: std.Io.Writer = .fixed(&stderr_buffer);
+    var stdin: std.Io.Reader = .fixed("input");
+    var host = Host.init(&stdout, &stderr, &stdin);
+
+    const bad_fd = try host.handleSyscall(&cpu, .{
+        .number = 63,
+        .args = .{ 1, 0, 1, 0, 0, 0 },
+    });
+    const bad_address = try host.handleSyscall(&cpu, .{
+        .number = 63,
+        .args = .{ 0, Cpu.memory_size, 1, 0, 0, 0 },
+    });
+
+    try std.testing.expectEqual(@as(u32, 0) -% 9, bad_fd.returned);
+    try std.testing.expectEqual(@as(u32, 0) -% 14, bad_address.returned);
 }
