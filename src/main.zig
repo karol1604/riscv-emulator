@@ -1,8 +1,11 @@
 const std = @import("std");
-const Cpu = @import("cpu").Cpu;
+const cpu_mod = @import("cpu");
+const Cpu = cpu_mod.Cpu;
 const elf = @import("elf.zig");
+const host_mod = @import("host.zig");
 
 pub fn main(init: std.process.Init) !void {
+    var host = host_mod.Host{};
     std.debug.print("=== Instruction demo ===\n", .{});
 
     const words = [_]u32{
@@ -50,6 +53,7 @@ pub fn main(init: std.process.Init) !void {
         0x01877463, // bgeu x14, x24, 8
         0x06300f93, // addi x31, x0, 99 (skipped)
         0x00f00f93, // addi x31, x0, 15
+        0x00100073, // ebreak
     };
 
     var buf: [words.len * 4]u8 = undefined;
@@ -57,7 +61,7 @@ pub fn main(init: std.process.Init) !void {
 
     var cpu = Cpu{};
     try cpu.loadProgramAt(0, memory);
-    try cpu.run(words.len - 5); // five taken branches each skip one instruction
+    _ = try host.run(&cpu, words.len);
     cpu.dumpRegisters();
 
     std.debug.print("\n=== Loop demo ===\n", .{});
@@ -67,6 +71,7 @@ pub fn main(init: std.process.Init) !void {
         0x00a00113, // addi x2, x0, 10  (limit = 10)
         0x00108093, // addi x1, x1, 1   (counter += 1)
         0xfe20cee3, // blt  x1, x2, -4  (loop while counter < limit)
+        0x00100073, // ebreak
     };
 
     var loop_buf: [loop_words.len * 4]u8 = undefined;
@@ -74,7 +79,7 @@ pub fn main(init: std.process.Init) !void {
 
     var loop_cpu = Cpu{};
     try loop_cpu.loadProgramAt(0, loop_memory);
-    try loop_cpu.run(2 + (2 * 10));
+    _ = try host.run(&loop_cpu, 2 + (2 * 10) + 1);
 
     std.debug.print("counter: {d}, limit: {d}, pc: 0x{x:0>8}\n", .{
         loop_cpu.regs[1],
@@ -93,6 +98,7 @@ pub fn main(init: std.process.Init) !void {
         0x00550513, // addi a0, a0, 5       (function: return a0 + 5)
         0x00008067, // jalr x0, 0(ra)        (return)
         0x00050613, // addi x12, a0, 0      (end marker/result copy)
+        0x00100073, // ebreak
     };
 
     var function_buf: [function_words.len * 4]u8 = undefined;
@@ -100,7 +106,7 @@ pub fn main(init: std.process.Init) !void {
 
     var function_cpu = Cpu{};
     try function_cpu.loadProgramAt(0, function_memory);
-    try function_cpu.run(7);
+    _ = try host.run(&function_cpu, function_words.len);
 
     std.debug.print("return address: 0x{x:0>8}, result: {d}, after return: {d}, pc: 0x{x:0>8}\n", .{
         function_cpu.regs[1],
@@ -131,7 +137,7 @@ pub fn main(init: std.process.Init) !void {
     try cpu_bin.loadProgramAt(0, program);
 
     std.debug.print("\n=== Binary file demo ===\n", .{});
-    try cpu_bin.runUntilHalt(1000);
+    _ = try host.run(&cpu_bin, 1000);
     cpu_bin.dumpRegisters();
 
     const elf_data = try elf.loadElf(io, allocator, "program5.elf");
@@ -147,8 +153,9 @@ pub fn main(init: std.process.Init) !void {
     try elf.loadElfIntoCpu(allocator, &cpu_elf, elf_data);
 
     std.debug.print("\n=== ELF file demo ===\n", .{});
-    try cpu_elf.runUntilHalt(1000);
+    const res = try host.run(&cpu_elf, 1000);
     cpu_elf.dumpRegisters();
+    std.debug.print("Syscall result: {f}\n", .{res});
 }
 
 fn toBytes(words: []const u32, bytes: []u8) []u8 {

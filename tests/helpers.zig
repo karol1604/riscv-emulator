@@ -14,7 +14,7 @@ pub fn loadWords(cpu: *Cpu, address: u32, comptime words: []const u32) !void {
 pub fn executeWords(comptime words: []const u32) !Cpu {
     var cpu = Cpu{};
     try loadWords(&cpu, 0, words);
-    try cpu.run(words.len);
+    try cpu.runInstructionsForTesting(words.len);
     return cpu;
 }
 
@@ -35,7 +35,7 @@ pub fn branchPc(comptime funct3: u3, lhs: u32, rhs: u32) !u32 {
     try loadWords(&cpu, 0, &.{encodeBranch(funct3, 8)});
     cpu.regs[1] = lhs;
     cpu.regs[2] = rhs;
-    try cpu.run(1);
+    try cpu.runInstructionsForTesting(1);
     return cpu.pc;
 }
 

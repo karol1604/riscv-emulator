@@ -293,6 +293,7 @@ pub const Instruction = union(enum) {
         rs1: Register,
         rs2: Register,
     },
+    ecall,
 
     pub fn format(self: Instruction, writer: *std.Io.Writer) !void {
         switch (self) {
@@ -610,6 +611,9 @@ pub const Instruction = union(enum) {
                     @tagName(instr.rs1),
                     @tagName(instr.rs2),
                 });
+            },
+            .ecall => {
+                try writer.print("ecall", .{});
             },
         }
     }
@@ -1041,16 +1045,11 @@ pub fn decode(instruction: u32) !Instruction {
             } };
         },
         .system => {
-            const raw: RawInstructionTypeI = @bitCast(instruction);
-            switch (raw.funct3) {
-                0b000 => {
-                    if (raw.imm != 1) return error.UnsupportedInstruction;
-                    if (raw.rs1 != 0) return error.UnsupportedInstruction;
-                    if (raw.rd != 0) return error.UnsupportedInstruction;
-                    return .{ .ebreak = {} };
-                },
-                else => return error.UnsupportedInstruction,
-            }
+            return switch (instruction) {
+                0x00000073 => .{ .ecall = {} },
+                0x00100073 => .{ .ebreak = {} },
+                else => error.UnsupportedInstruction,
+            };
         },
         else => return error.UnsupportedOpcode,
     }

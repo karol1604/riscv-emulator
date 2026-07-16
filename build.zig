@@ -22,6 +22,22 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const elf_module = b.createModule(.{
+        .root_source_file = b.path("src/elf.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "cpu", .module = cpu_module },
+        },
+    });
+    const host_module = b.createModule(.{
+        .root_source_file = b.path("src/host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "cpu", .module = cpu_module },
+        },
+    });
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -111,6 +127,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "cpu", .module = cpu_module },
+                .{ .name = "elf", .module = elf_module },
+                .{ .name = "host", .module = host_module },
             },
         }),
     });

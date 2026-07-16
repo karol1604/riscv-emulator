@@ -16,7 +16,7 @@ test "program can be loaded and executed at a nonzero address" {
     var cpu = Cpu{};
     try cpu.loadProgramAt(16, &program);
     cpu.pc = 16;
-    try cpu.run(1);
+    try cpu.runInstructionsForTesting(1);
 
     try std.testing.expectEqual(@as(u32, 7), cpu.regs[1]);
     try std.testing.expectEqual(@as(u32, 20), cpu.pc);
@@ -69,7 +69,7 @@ test "sb stores only the low byte and permits odd addresses" {
     cpu.regs[2] = 0xdead_be80;
     cpu.memory[256..260].* = .{ 0x11, 0x22, 0x33, 0x44 };
 
-    try cpu.run(1);
+    try cpu.runInstructionsForTesting(1);
 
     try std.testing.expectEqualSlices(
         u8,
@@ -88,7 +88,7 @@ test "sh stores only the low halfword in little-endian order" {
     cpu.regs[2] = 0x1234_abcd;
     cpu.memory[256..260].* = .{ 0x11, 0x22, 0x33, 0x44 };
 
-    try cpu.run(2);
+    try cpu.runInstructionsForTesting(2);
 
     try std.testing.expectEqual(@as(u32, 0xabcd), cpu.regs[3]);
     try std.testing.expectEqualSlices(
@@ -104,8 +104,8 @@ test "unaligned lw and sw fail without advancing pc" {
         0x10100093, // addi x1, x0, 257
         0x0000a103, // lw   x2, 0(x1)
     });
-    try load_cpu.run(1);
-    try std.testing.expectError(error.UnalignedAccess, load_cpu.run(1));
+    try load_cpu.runInstructionsForTesting(1);
+    try std.testing.expectError(error.UnalignedAccess, load_cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 4), load_cpu.pc);
 
     var store_cpu = Cpu{};
@@ -114,8 +114,8 @@ test "unaligned lw and sw fail without advancing pc" {
         0x02a00113, // addi x2, x0, 42
         0x0020a023, // sw   x2, 0(x1)
     });
-    try store_cpu.run(2);
-    try std.testing.expectError(error.UnalignedAccess, store_cpu.run(1));
+    try store_cpu.runInstructionsForTesting(2);
+    try std.testing.expectError(error.UnalignedAccess, store_cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 8), store_cpu.pc);
     try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0 }, store_cpu.memory[257..261]);
 }
@@ -124,7 +124,7 @@ test "out-of-bounds lw and sw fail without advancing pc or writing memory" {
     var load_cpu = Cpu{};
     try loadWords(&load_cpu, 0, &.{0x0000a103}); // lw x2, 0(x1)
     load_cpu.regs[1] = @intCast(load_cpu.memory.len);
-    try std.testing.expectError(error.OutOfBounds, load_cpu.run(1));
+    try std.testing.expectError(error.OutOfBounds, load_cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 0), load_cpu.pc);
 
     var store_cpu = Cpu{};
@@ -133,7 +133,7 @@ test "out-of-bounds lw and sw fail without advancing pc or writing memory" {
     store_cpu.regs[2] = 0xdead_beef;
     const tail_before = store_cpu.memory[store_cpu.memory.len - 4 ..].*;
 
-    try std.testing.expectError(error.OutOfBounds, store_cpu.run(1));
+    try std.testing.expectError(error.OutOfBounds, store_cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 0), store_cpu.pc);
     try std.testing.expectEqualSlices(
         u8,
@@ -147,6 +147,6 @@ test "fetching an instruction beyond memory returns OutOfBounds" {
     cpu.pc = @intCast(cpu.memory.len - 3);
 
     const initial_pc = cpu.pc;
-    try std.testing.expectError(error.OutOfBounds, cpu.run(1));
+    try std.testing.expectError(error.OutOfBounds, cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(initial_pc, cpu.pc);
 }

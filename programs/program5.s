@@ -15,7 +15,10 @@ _start:
     bne  a0, t0, failed
 
     addi x31, x0, 1
-    ebreak
+
+    addi a7, x0, 93
+    addi a0, x0, 69
+    ecall
 
 failed:
     addi x31, x0, -1

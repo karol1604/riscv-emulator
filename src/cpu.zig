@@ -6,6 +6,17 @@ const Register = instruction.Register;
 const Instruction = instruction.Instruction;
 const decode = instruction.decode;
 
+pub const SyscallRequest = struct {
+    number: u32,
+    args: [6]u32,
+};
+
+pub const StepResult = union(enum) {
+    running,
+    syscall: SyscallRequest,
+    breakpoint,
+};
+
 pub const Cpu = struct {
     pub const memory_size = 128 * 1024;
     regs: [32]u32 = .{0} ** 32,
@@ -13,23 +24,18 @@ pub const Cpu = struct {
     pc: u32 = 0,
     memory: [memory_size]u8 = .{0} ** memory_size,
 
-    /// Executes a number of instructions starting from the current program counter.
-    pub fn run(self: *Cpu, instr_count: usize) !void {
-        for (0..instr_count) |_| {
-            try self.step();
+    /// Executes exactly `instr_count` ordinary instructions for instruction-level tests.
+    pub fn runInstructionsForTesting(self: *Cpu, instr_count: usize) !void {
+        if (!builtin.is_test) {
+            @compileError("runInstructionsForTesting may only be used in tests");
         }
-    }
 
-    /// Executes instructions until a halt instruction is encountered
-    /// or the maximum instruction count is reached.
-    pub fn runUntilHalt(self: *Cpu, max_instr_count: usize) !void {
-        for (0..max_instr_count) |_| {
-            self.step() catch |err| switch (err) {
-                error.Halted => return,
-                else => return err,
-            };
+        for (0..instr_count) |_| {
+            switch (try self.step()) {
+                .running => {},
+                .syscall, .breakpoint => return error.UnexpectedExecutionEvent,
+            }
         }
-        return error.InstructionLimitExceeded;
     }
 
     pub fn zeroOutMemory(self: *Cpu, start: usize, end: usize) void {
@@ -51,7 +57,7 @@ pub const Cpu = struct {
         @memcpy(self.memory[start..][0..program.len], program);
     }
 
-    fn step(self: *Cpu) !void {
+    pub fn step(self: *Cpu) !StepResult {
         const instruction_pc = self.pc;
         const raw = try self.fetchInstruction();
         const instr = try decode(raw);
@@ -63,6 +69,23 @@ pub const Cpu = struct {
         self.pc +%= 4; // increment before execution to handle branches correctly
         errdefer self.pc = instruction_pc;
         try self.executeInstruction(instr, instruction_pc);
+
+        if (instr == .ebreak) return .{ .breakpoint = {} };
+        if (instr == .ecall) {
+            const syscall_request = SyscallRequest{
+                .number = self.readRegister(.x17),
+                .args = .{
+                    self.readRegister(.x10),
+                    self.readRegister(.x11),
+                    self.readRegister(.x12),
+                    self.readRegister(.x13),
+                    self.readRegister(.x14),
+                    self.readRegister(.x15),
+                },
+            };
+            return .{ .syscall = syscall_request };
+        }
+        return .{ .running = {} };
     }
 
     fn executeInstruction(self: *Cpu, instr: Instruction, instruction_pc: u32) !void {
@@ -256,8 +279,9 @@ pub const Cpu = struct {
                 self.writeRegister(i.rd, instruction_pc +% (@as(u32, i.imm) << 12));
             },
             .ebreak => {
-                std.debug.print("EBREAK instruction executed at 0x{x:0>8}\n", .{instruction_pc});
-                return error.Halted;
+                if (!builtin.is_test) {
+                    std.debug.print("EBREAK instruction executed at 0x{x:0>8}\n", .{instruction_pc});
+                }
             },
             .mul => |i| {
                 const lhs = self.readRegister(i.rs1);
@@ -331,6 +355,7 @@ pub const Cpu = struct {
                     self.writeRegister(i.rd, result);
                 }
             },
+            .ecall => {},
             // else => return error.UnsupportedInstruction,
         }
     }

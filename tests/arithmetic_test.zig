@@ -93,12 +93,12 @@ test "run executes exactly the requested number of instructions" {
     var cpu = Cpu{};
     try cpu.loadProgramAt(0, &program);
 
-    try cpu.run(1);
+    try cpu.runInstructionsForTesting(1);
     try std.testing.expectEqual(@as(u32, 5), cpu.regs[1]);
     try std.testing.expectEqual(@as(u32, 0), cpu.regs[2]);
     try std.testing.expectEqual(@as(u32, 4), cpu.pc);
 
-    try cpu.run(1);
+    try cpu.runInstructionsForTesting(1);
     try std.testing.expectEqual(@as(u32, 7), cpu.regs[2]);
     try std.testing.expectEqual(@as(u32, 8), cpu.pc);
 }
@@ -324,7 +324,7 @@ test "byte and halfword accesses work at the end of memory" {
     });
     byte_cpu.regs[1] = @intCast(byte_cpu.memory.len - 1);
     byte_cpu.regs[2] = 0xab;
-    try byte_cpu.run(2);
+    try byte_cpu.runInstructionsForTesting(2);
     try std.testing.expectEqual(@as(u32, 0xab), byte_cpu.regs[3]);
     try std.testing.expectEqual(@as(u8, 0xab), byte_cpu.memory[byte_cpu.memory.len - 1]);
 
@@ -335,7 +335,7 @@ test "byte and halfword accesses work at the end of memory" {
     });
     half_cpu.regs[1] = @intCast(half_cpu.memory.len - 2);
     half_cpu.regs[2] = 0xbeef;
-    try half_cpu.run(2);
+    try half_cpu.runInstructionsForTesting(2);
     try std.testing.expectEqual(@as(u32, 0xbeef), half_cpu.regs[3]);
     try std.testing.expectEqualSlices(
         u8,
@@ -348,13 +348,13 @@ test "unaligned lh lhu and sh fail without advancing pc" {
     var lh_cpu = Cpu{};
     try loadWords(&lh_cpu, 0, &.{0x00009103}); // lh x2, 0(x1)
     lh_cpu.regs[1] = 257;
-    try std.testing.expectError(error.UnalignedAccess, lh_cpu.run(1));
+    try std.testing.expectError(error.UnalignedAccess, lh_cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 0), lh_cpu.pc);
 
     var lhu_cpu = Cpu{};
     try loadWords(&lhu_cpu, 0, &.{0x0000d103}); // lhu x2, 0(x1)
     lhu_cpu.regs[1] = 257;
-    try std.testing.expectError(error.UnalignedAccess, lhu_cpu.run(1));
+    try std.testing.expectError(error.UnalignedAccess, lhu_cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 0), lhu_cpu.pc);
 
     var sh_cpu = Cpu{};
@@ -362,7 +362,7 @@ test "unaligned lh lhu and sh fail without advancing pc" {
     sh_cpu.regs[1] = 257;
     sh_cpu.regs[2] = 0xbeef;
     const before = sh_cpu.memory[256..260].*;
-    try std.testing.expectError(error.UnalignedAccess, sh_cpu.run(1));
+    try std.testing.expectError(error.UnalignedAccess, sh_cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 0), sh_cpu.pc);
     try std.testing.expectEqualSlices(u8, &before, sh_cpu.memory[256..260]);
 }
@@ -372,7 +372,7 @@ test "unsupported opcode is rejected without advancing pc" {
     const program = [_]u8{ 0xff, 0xff, 0xff, 0xff };
     try cpu.loadProgramAt(0, &program);
 
-    try std.testing.expectError(error.UnsupportedOpcode, cpu.run(1));
+    try std.testing.expectError(error.UnsupportedOpcode, cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
 
@@ -382,7 +382,7 @@ test "unsupported logical funct7 is rejected without advancing pc" {
     std.mem.writeInt(u32, &program, 0x4020f2b3, .little);
     try cpu.loadProgramAt(0, &program);
 
-    try std.testing.expectError(error.UnsupportedInstruction, cpu.run(1));
+    try std.testing.expectError(error.UnsupportedInstruction, cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
 
@@ -392,7 +392,7 @@ test "unsupported shift-immediate funct7 is rejected without advancing pc" {
     std.mem.writeInt(u32, &program, 0x40109113, .little);
     try cpu.loadProgramAt(0, &program);
 
-    try std.testing.expectError(error.UnsupportedInstruction, cpu.run(1));
+    try std.testing.expectError(error.UnsupportedInstruction, cpu.runInstructionsForTesting(1));
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
 
@@ -416,7 +416,7 @@ test "auipc adds the upper immediate to its instruction address" {
     });
     cpu.pc = 0x100;
 
-    try cpu.run(2);
+    try cpu.runInstructionsForTesting(2);
 
     try std.testing.expectEqual(@as(u32, 0x1234_5100), cpu.regs[1]);
     try std.testing.expectEqual(@as(u32, 0xffff_f104), cpu.regs[2]);
@@ -461,7 +461,7 @@ test "mulh writes the upper 32 bits of a signed product" {
     cpu.regs[5] = 0xffff_ffff; // -1
     cpu.regs[6] = 2;
 
-    try cpu.run(2);
+    try cpu.runInstructionsForTesting(2);
 
     try std.testing.expectEqual(@as(u32, 1), cpu.regs[3]);
     try std.testing.expectEqual(@as(u32, 0xffff_ffff), cpu.regs[7]);
@@ -479,7 +479,7 @@ test "mulhsu uses a signed first operand and unsigned second operand" {
     cpu.regs[5] = 0x7fff_ffff;
     cpu.regs[6] = 0xffff_ffff;
 
-    try cpu.run(2);
+    try cpu.runInstructionsForTesting(2);
 
     try std.testing.expectEqual(@as(u32, 0xffff_ffff), cpu.regs[3]);
     try std.testing.expectEqual(@as(u32, 0x7fff_fffe), cpu.regs[7]);
@@ -499,7 +499,7 @@ test "div handles signs division by zero and signed overflow" {
     cpu.regs[5] = 0x8000_0000; // INT_MIN
     cpu.regs[6] = 0xffff_ffff; // -1
 
-    try cpu.run(4);
+    try cpu.runInstructionsForTesting(4);
 
     try std.testing.expectEqual(@as(u32, 0xffff_fffa), cpu.regs[3]);
     try std.testing.expectEqual(@as(u32, 0xffff_ffff), cpu.regs[4]);
@@ -522,7 +522,7 @@ test "rem follows dividend sign and handles its special cases" {
     cpu.regs[8] = 20;
     cpu.regs[9] = 0xffff_fffd; // -3
 
-    try cpu.run(4);
+    try cpu.runInstructionsForTesting(4);
 
     try std.testing.expectEqual(@as(u32, 0xffff_fffe), cpu.regs[3]);
     try std.testing.expectEqual(@as(u32, 0xffff_ffec), cpu.regs[4]);
@@ -539,7 +539,7 @@ test "divu performs unsigned division and handles division by zero" {
     cpu.regs[1] = 0xffff_ffec;
     cpu.regs[2] = 3;
 
-    try cpu.run(2);
+    try cpu.runInstructionsForTesting(2);
 
     try std.testing.expectEqual(@as(u32, 0x5555_554e), cpu.regs[3]);
     try std.testing.expectEqual(@as(u32, 0xffff_ffff), cpu.regs[4]);
@@ -554,7 +554,7 @@ test "remu performs unsigned remainder and returns the dividend for zero" {
     cpu.regs[1] = 0xffff_ffec;
     cpu.regs[2] = 3;
 
-    try cpu.run(2);
+    try cpu.runInstructionsForTesting(2);
 
     try std.testing.expectEqual(@as(u32, 2), cpu.regs[3]);
     try std.testing.expectEqual(@as(u32, 0xffff_ffec), cpu.regs[4]);
