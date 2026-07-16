@@ -1,5 +1,6 @@
 const std = @import("std");
 const Cpu = @import("cpu").Cpu;
+const elf = @import("elf.zig");
 
 pub fn main(init: std.process.Init) !void {
     std.debug.print("=== Instruction demo ===\n", .{});
@@ -114,7 +115,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = debug_allocator.allocator();
 
     const io = init.io;
-    const file = try std.Io.Dir.cwd().openFile(io, "program.bin", .{});
+    const file = try std.Io.Dir.cwd().openFile(io, "programs/program5.bin", .{});
     defer file.close(io);
 
     const program = try allocator.alloc(u8, try file.length(io));
@@ -132,6 +133,12 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("\n=== Binary file demo ===\n", .{});
     try cpu_bin.runUntilHalt(1000);
     cpu_bin.dumpRegisters();
+
+    const elf_data = try elf.loadElf(io, allocator, "program5.elf");
+    defer allocator.free(elf_data);
+
+    const elf_header = try elf.parseELFHeader(elf_data);
+    std.debug.print("\n elf header: {any}\n", .{elf_header});
 }
 
 fn toBytes(words: []const u32, bytes: []u8) []u8 {

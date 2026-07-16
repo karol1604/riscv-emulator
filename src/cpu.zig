@@ -7,7 +7,7 @@ const Instruction = instruction.Instruction;
 const decode = instruction.decode;
 
 pub const Cpu = struct {
-    const memory_size = 64 * 1024;
+    const memory_size = 128 * 1024;
     regs: [32]u32 = .{0} ** 32,
     /// Program counter
     pc: u32 = 0,
@@ -254,6 +254,79 @@ pub const Cpu = struct {
                 std.debug.print("EBREAK instruction executed at 0x{x:0>8}\n", .{instruction_pc});
                 return error.Halted;
             },
+            .mul => |i| {
+                const lhs = self.readRegister(i.rs1);
+                const rhs = self.readRegister(i.rs2);
+                const prod: u64 = @as(u64, lhs) * @as(u64, rhs);
+                const result: u32 = @truncate(prod);
+                self.writeRegister(i.rd, result);
+            },
+            .mulhu => |i| {
+                const lhs = self.readRegister(i.rs1);
+                const rhs = self.readRegister(i.rs2);
+                const prod: u64 = @as(u64, lhs) * @as(u64, rhs);
+                const result: u32 = @truncate(prod >> 32);
+                self.writeRegister(i.rd, result);
+            },
+            .mulh => |i| {
+                const lhs: i32 = @bitCast(self.readRegister(i.rs1));
+                const rhs: i32 = @bitCast(self.readRegister(i.rs2));
+                const prod: i64 = @as(i64, lhs) * @as(i64, rhs);
+                const prod_bits: u64 = @bitCast(prod);
+                self.writeRegister(i.rd, @truncate(prod_bits >> 32));
+            },
+            .mulhsu => |i| {
+                const lhs: i32 = @bitCast(self.readRegister(i.rs1));
+                const rhs = self.readRegister(i.rs2);
+                const prod: i64 = @as(i64, lhs) * @as(i64, rhs);
+                const prod_bits: u64 = @bitCast(prod);
+                self.writeRegister(i.rd, @truncate(prod_bits >> 32));
+            },
+            .div => |i| {
+                const dividend: i32 = @bitCast(self.readRegister(i.rs1));
+                const divisor: i32 = @bitCast(self.readRegister(i.rs2));
+                if (divisor == 0) {
+                    self.writeRegister(i.rd, 0xffff_ffff);
+                } else if (dividend == std.math.minInt(i32) and divisor == -1) {
+                    self.writeRegister(i.rd, @bitCast(dividend));
+                } else {
+                    const result = @divTrunc(dividend, divisor);
+                    self.writeRegister(i.rd, @bitCast(result));
+                }
+            },
+            .rem => |i| {
+                const dividend: i32 = @bitCast(self.readRegister(i.rs1));
+                const divisor: i32 = @bitCast(self.readRegister(i.rs2));
+                if (divisor == 0) {
+                    self.writeRegister(i.rd, @bitCast(dividend));
+                } else if (dividend == std.math.minInt(i32) and divisor == -1) {
+                    self.writeRegister(i.rd, 0);
+                } else {
+                    const result: i32 = @rem(dividend, divisor);
+                    self.writeRegister(i.rd, @bitCast(result));
+                }
+            },
+            .divu => |i| {
+                const dividend = self.readRegister(i.rs1);
+                const divisor = self.readRegister(i.rs2);
+                if (divisor == 0) {
+                    self.writeRegister(i.rd, 0xffff_ffff);
+                } else {
+                    const result = @divTrunc(dividend, divisor);
+                    self.writeRegister(i.rd, result);
+                }
+            },
+            .remu => |i| {
+                const dividend = self.readRegister(i.rs1);
+                const divisor = self.readRegister(i.rs2);
+                if (divisor == 0) {
+                    self.writeRegister(i.rd, dividend);
+                } else {
+                    const result = @rem(dividend, divisor);
+                    self.writeRegister(i.rd, result);
+                }
+            },
+            // else => return error.UnsupportedInstruction,
         }
     }
 

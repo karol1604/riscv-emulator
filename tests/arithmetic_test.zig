@@ -8,6 +8,7 @@ const encodeBranch = helpers.encodeBranch;
 const branchPc = helpers.branchPc;
 const encodeJal = helpers.encodeJal;
 const encodeJalr = helpers.encodeJalr;
+const encodeM = helpers.encodeM;
 
 test "executes the complete supported instruction program" {
     const cpu = try executeWords(&.{
@@ -420,4 +421,141 @@ test "auipc adds the upper immediate to its instruction address" {
     try std.testing.expectEqual(@as(u32, 0x1234_5100), cpu.regs[1]);
     try std.testing.expectEqual(@as(u32, 0xffff_f104), cpu.regs[2]);
     try std.testing.expectEqual(@as(u32, 0x108), cpu.pc);
+}
+
+test "mul writes the low 32 bits of the product" {
+    const cpu = try executeWords(&.{
+        0xfff00093, // addi x1, x0, -1
+        0x00200113, // addi x2, x0, 2
+        0x022081b3, // mul  x3, x1, x2
+        0x02208033, // mul  x0, x1, x2 (write must be ignored)
+    });
+
+    try std.testing.expectEqual(@as(u32, 0xffff_fffe), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0), cpu.regs[0]);
+    try std.testing.expectEqual(@as(u32, 16), cpu.pc);
+}
+
+test "mulhu writes the upper 32 bits of an unsigned product" {
+    const cpu = try executeWords(&.{
+        0x800000b7, // lui   x1, 0x80000
+        0x00200113, // addi  x2, x0, 2
+        0x0220b1b3, // mulhu x3, x1, x2
+        0xfff00213, // addi  x4, x0, -1
+        0x024232b3, // mulhu x5, x4, x4
+    });
+
+    try std.testing.expectEqual(@as(u32, 1), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0xffff_fffe), cpu.regs[5]);
+    try std.testing.expectEqual(@as(u32, 20), cpu.pc);
+}
+
+test "mulh writes the upper 32 bits of a signed product" {
+    var cpu = Cpu{};
+    try loadWords(&cpu, 0, &.{
+        encodeM(0b001, 3, 1, 2), // mulh x3, x1, x2
+        encodeM(0b001, 7, 5, 6), // mulh x7, x5, x6
+    });
+    cpu.regs[1] = 0xffff_fffe; // -2
+    cpu.regs[2] = 0x8000_0000; // INT_MIN
+    cpu.regs[5] = 0xffff_ffff; // -1
+    cpu.regs[6] = 2;
+
+    try cpu.run(2);
+
+    try std.testing.expectEqual(@as(u32, 1), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0xffff_ffff), cpu.regs[7]);
+    try std.testing.expectEqual(@as(u32, 8), cpu.pc);
+}
+
+test "mulhsu uses a signed first operand and unsigned second operand" {
+    var cpu = Cpu{};
+    try loadWords(&cpu, 0, &.{
+        encodeM(0b010, 3, 1, 2), // mulhsu x3, x1, x2
+        encodeM(0b010, 7, 5, 6), // mulhsu x7, x5, x6
+    });
+    cpu.regs[1] = 0xffff_fffe; // signed -2
+    cpu.regs[2] = 0x8000_0000; // unsigned 2147483648
+    cpu.regs[5] = 0x7fff_ffff;
+    cpu.regs[6] = 0xffff_ffff;
+
+    try cpu.run(2);
+
+    try std.testing.expectEqual(@as(u32, 0xffff_ffff), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0x7fff_fffe), cpu.regs[7]);
+    try std.testing.expectEqual(@as(u32, 8), cpu.pc);
+}
+
+test "div handles signs division by zero and signed overflow" {
+    var cpu = Cpu{};
+    try loadWords(&cpu, 0, &.{
+        encodeM(0b100, 3, 1, 2), // div x3, x1, x2
+        encodeM(0b100, 4, 1, 0), // div x4, x1, x0
+        encodeM(0b100, 7, 5, 6), // div x7, x5, x6
+        encodeM(0b100, 0, 1, 2), // div x0, x1, x2
+    });
+    cpu.regs[1] = 0xffff_ffec; // -20
+    cpu.regs[2] = 3;
+    cpu.regs[5] = 0x8000_0000; // INT_MIN
+    cpu.regs[6] = 0xffff_ffff; // -1
+
+    try cpu.run(4);
+
+    try std.testing.expectEqual(@as(u32, 0xffff_fffa), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0xffff_ffff), cpu.regs[4]);
+    try std.testing.expectEqual(@as(u32, 0x8000_0000), cpu.regs[7]);
+    try std.testing.expectEqual(@as(u32, 0), cpu.regs[0]);
+}
+
+test "rem follows dividend sign and handles its special cases" {
+    var cpu = Cpu{};
+    try loadWords(&cpu, 0, &.{
+        encodeM(0b110, 3, 1, 2), // rem x3, x1, x2
+        encodeM(0b110, 4, 1, 0), // rem x4, x1, x0
+        encodeM(0b110, 7, 5, 6), // rem x7, x5, x6
+        encodeM(0b110, 10, 8, 9), // rem x10, x8, x9
+    });
+    cpu.regs[1] = 0xffff_ffec; // -20
+    cpu.regs[2] = 3;
+    cpu.regs[5] = 0x8000_0000; // INT_MIN
+    cpu.regs[6] = 0xffff_ffff; // -1
+    cpu.regs[8] = 20;
+    cpu.regs[9] = 0xffff_fffd; // -3
+
+    try cpu.run(4);
+
+    try std.testing.expectEqual(@as(u32, 0xffff_fffe), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0xffff_ffec), cpu.regs[4]);
+    try std.testing.expectEqual(@as(u32, 0), cpu.regs[7]);
+    try std.testing.expectEqual(@as(u32, 2), cpu.regs[10]);
+}
+
+test "divu performs unsigned division and handles division by zero" {
+    var cpu = Cpu{};
+    try loadWords(&cpu, 0, &.{
+        encodeM(0b101, 3, 1, 2), // divu x3, x1, x2
+        encodeM(0b101, 4, 1, 0), // divu x4, x1, x0
+    });
+    cpu.regs[1] = 0xffff_ffec;
+    cpu.regs[2] = 3;
+
+    try cpu.run(2);
+
+    try std.testing.expectEqual(@as(u32, 0x5555_554e), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0xffff_ffff), cpu.regs[4]);
+}
+
+test "remu performs unsigned remainder and returns the dividend for zero" {
+    var cpu = Cpu{};
+    try loadWords(&cpu, 0, &.{
+        encodeM(0b111, 3, 1, 2), // remu x3, x1, x2
+        encodeM(0b111, 4, 1, 0), // remu x4, x1, x0
+    });
+    cpu.regs[1] = 0xffff_ffec;
+    cpu.regs[2] = 3;
+
+    try cpu.run(2);
+
+    try std.testing.expectEqual(@as(u32, 2), cpu.regs[3]);
+    try std.testing.expectEqual(@as(u32, 0xffff_ffec), cpu.regs[4]);
 }

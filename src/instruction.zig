@@ -253,6 +253,46 @@ pub const Instruction = union(enum) {
         imm: u20,
     },
     ebreak,
+    mul: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    mulhu: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    mulh: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    mulhsu: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    div: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    rem: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    divu: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
+    remu: struct {
+        rd: Register,
+        rs1: Register,
+        rs2: Register,
+    },
 
     pub fn format(self: Instruction, writer: *std.Io.Writer) !void {
         switch (self) {
@@ -515,6 +555,62 @@ pub const Instruction = union(enum) {
             .ebreak => {
                 try writer.print("ebreak", .{});
             },
+            .mul => |instr| {
+                try writer.print("mul {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .mulhu => |instr| {
+                try writer.print("mulhu {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .mulh => |instr| {
+                try writer.print("mulh {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .mulhsu => |instr| {
+                try writer.print("mulhsu {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .div => |instr| {
+                try writer.print("div {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .rem => |instr| {
+                try writer.print("rem {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .divu => |instr| {
+                try writer.print("divu {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
+            .remu => |instr| {
+                try writer.print("remu {s}, {s}, {s}", .{
+                    @tagName(instr.rd),
+                    @tagName(instr.rs1),
+                    @tagName(instr.rs2),
+                });
+            },
         }
     }
 };
@@ -638,6 +734,13 @@ pub fn decode(instruction: u32) !Instruction {
                                 .rs2 = @enumFromInt(raw.rs2),
                             } };
                         },
+                        0b0000001 => {
+                            return .{ .mul = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
                         else => return error.UnsupportedInstruction,
                     }
                 },
@@ -645,6 +748,13 @@ pub fn decode(instruction: u32) !Instruction {
                     switch (raw.funct7) {
                         0b0000000 => {
                             return .{ .@"and" = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        0b0000001 => {
+                            return .{ .remu = .{
                                 .rd = @enumFromInt(raw.rd),
                                 .rs1 = @enumFromInt(raw.rs1),
                                 .rs2 = @enumFromInt(raw.rs2),
@@ -662,6 +772,13 @@ pub fn decode(instruction: u32) !Instruction {
                                 .rs2 = @enumFromInt(raw.rs2),
                             } };
                         },
+                        0b0000001 => {
+                            return .{ .rem = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
                         else => return error.UnsupportedInstruction,
                     }
                 },
@@ -674,6 +791,13 @@ pub fn decode(instruction: u32) !Instruction {
                                 .rs2 = @enumFromInt(raw.rs2),
                             } };
                         },
+                        0b0000001 => {
+                            return .{ .div = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
                         else => return error.UnsupportedInstruction,
                     }
                 },
@@ -681,6 +805,13 @@ pub fn decode(instruction: u32) !Instruction {
                     switch (raw.funct7) {
                         0b0000000 => {
                             return .{ .sll = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        0b0000001 => {
+                            return .{ .mulh = .{
                                 .rd = @enumFromInt(raw.rd),
                                 .rs1 = @enumFromInt(raw.rs1),
                                 .rs2 = @enumFromInt(raw.rs2),
@@ -705,6 +836,13 @@ pub fn decode(instruction: u32) !Instruction {
                                 .rs2 = @enumFromInt(raw.rs2),
                             } };
                         },
+                        0b0000001 => {
+                            return .{ .divu = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
                         else => return error.UnsupportedInstruction,
                     }
                 },
@@ -717,6 +855,13 @@ pub fn decode(instruction: u32) !Instruction {
                                 .rs2 = @enumFromInt(raw.rs2),
                             } };
                         },
+                        0b0000001 => {
+                            return .{ .mulhsu = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
                         else => return error.UnsupportedInstruction,
                     }
                 },
@@ -724,6 +869,13 @@ pub fn decode(instruction: u32) !Instruction {
                     switch (raw.funct7) {
                         0b0000000 => {
                             return .{ .sltu = .{
+                                .rd = @enumFromInt(raw.rd),
+                                .rs1 = @enumFromInt(raw.rs1),
+                                .rs2 = @enumFromInt(raw.rs2),
+                            } };
+                        },
+                        0b0000001 => {
+                            return .{ .mulhu = .{
                                 .rd = @enumFromInt(raw.rd),
                                 .rs1 = @enumFromInt(raw.rs1),
                                 .rs2 = @enumFromInt(raw.rs2),

@@ -56,3 +56,12 @@ pub fn encodeJalr(comptime rd: u5, comptime rs1: u5, comptime offset: i12) u32 {
         (@as(u32, rd) << 7) |
         0b1100111;
 }
+
+pub fn encodeM(comptime funct3: u3, comptime rd: u5, comptime rs1: u5, comptime rs2: u5) u32 {
+    return (@as(u32, 0b0000001) << 25) |
+        (@as(u32, rs2) << 20) |
+        (@as(u32, rs1) << 15) |
+        (@as(u32, funct3) << 12) |
+        (@as(u32, rd) << 7) |
+        0b0110011;
+}

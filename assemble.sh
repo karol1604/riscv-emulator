@@ -44,6 +44,7 @@ trap 'exit 1' HUP INT TERM
 
 "$llvm_bin/llvm-mc" \
     -triple=riscv32 \
+    -mattr=+m \
     -filetype=obj \
     "$source_file" \
     -o "$object_file"
