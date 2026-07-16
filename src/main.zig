@@ -3,9 +3,29 @@ const cpu_mod = @import("cpu");
 const Cpu = cpu_mod.Cpu;
 const elf = @import("elf.zig");
 const host_mod = @import("host.zig");
+const Host = host_mod.Host;
 
 pub fn main(init: std.process.Init) !void {
-    var host = host_mod.Host{};
+    var stdout_buffer: [4096]u8 = undefined;
+    var stderr_buffer: [4096]u8 = undefined;
+
+    var stdout = std.Io.File.stdout().writerStreaming(
+        init.io,
+        &stdout_buffer,
+    );
+    defer stdout.flush() catch {};
+
+    var stderr = std.Io.File.stderr().writerStreaming(
+        init.io,
+        &stderr_buffer,
+    );
+    defer stderr.flush() catch {};
+
+    var host = Host.init(
+        &stdout.interface,
+        &stderr.interface,
+    );
+
     std.debug.print("=== Instruction demo ===\n", .{});
 
     const words = [_]u32{
@@ -121,6 +141,7 @@ pub fn main(init: std.process.Init) !void {
     const allocator = debug_allocator.allocator();
 
     const io = init.io;
+
     const file = try std.Io.Dir.cwd().openFile(io, "programs/program5.bin", .{});
     defer file.close(io);
 
@@ -140,7 +161,7 @@ pub fn main(init: std.process.Init) !void {
     _ = try host.run(&cpu_bin, 1000);
     cpu_bin.dumpRegisters();
 
-    const elf_data = try elf.loadElf(io, allocator, "program5.elf");
+    const elf_data = try elf.loadElf(io, allocator, "programs/program5.elf");
     defer allocator.free(elf_data);
 
     const elf_header = try elf.parseELFHeader(elf_data);
@@ -155,7 +176,17 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("\n=== ELF file demo ===\n", .{});
     const res = try host.run(&cpu_elf, 1000);
     cpu_elf.dumpRegisters();
-    std.debug.print("Syscall result: {f}\n", .{res});
+    std.log.info("{f}\n", .{res});
+
+    const write_demo = try elf.loadElf(io, allocator, "programs/write-demo.elf");
+    defer allocator.free(write_demo);
+
+    var write_demo_cpu = Cpu{};
+    try elf.loadElfIntoCpu(allocator, &write_demo_cpu, write_demo);
+
+    std.debug.print("\n=== Write syscall demo ===\n", .{});
+    const write_demo_result = try host.run(&write_demo_cpu, 100);
+    std.log.info("{f}\n", .{write_demo_result});
 }
 
 fn toBytes(words: []const u32, bytes: []u8) []u8 {

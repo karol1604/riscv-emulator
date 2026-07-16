@@ -38,6 +38,15 @@ pub const Cpu = struct {
         }
     }
 
+    /// Returns a non-mutable slice of the CPU's memory starting at `address` and spanning `length` bytes.
+    pub fn getBytes(self: *const Cpu, address: u32, length: usize) ![]const u8 {
+        const start: usize = @intCast(address);
+        if (start > self.memory.len or length > self.memory.len - start) {
+            return error.OutOfBounds;
+        }
+        return self.memory[start..][0..length];
+    }
+
     pub fn zeroOutMemory(self: *Cpu, start: usize, end: usize) void {
         if (start > end or end > self.memory.len) return;
         @memset(self.memory[start..end], 0);
