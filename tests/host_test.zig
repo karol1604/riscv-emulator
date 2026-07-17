@@ -1,6 +1,7 @@
 const std = @import("std");
 const Cpu = @import("cpu").Cpu;
-const Host = @import("host").Host;
+const host_mod = @import("host");
+const Host = host_mod.Host;
 const helpers = @import("helpers.zig");
 
 test "exit syscall returns the guest exit status" {
@@ -142,4 +143,33 @@ test "read syscall validates the descriptor and guest buffer" {
 
     try std.testing.expectEqual(@as(u32, 0) -% 9, bad_fd.returned);
     try std.testing.expectEqual(@as(u32, 0) -% 14, bad_address.returned);
+}
+
+test "initial stack contains aligned argc argv pointers and null terminator" {
+    var cpu = Cpu{};
+    try host_mod.prepareInitialStack(&cpu, &.{ "argv-demo.elf", "hello" });
+
+    const stack = try cpu.getBytes(cpu.regs[2], 16);
+    const argc = std.mem.readInt(u32, stack[0..4], .little);
+    const argv_0 = std.mem.readInt(u32, stack[4..8], .little);
+    const argv_1 = std.mem.readInt(u32, stack[8..12], .little);
+    const terminator = std.mem.readInt(u32, stack[12..16], .little);
+
+    try std.testing.expectEqual(@as(u32, 0), cpu.regs[2] % 16);
+    try std.testing.expectEqual(@as(u32, 2), argc);
+    try std.testing.expectEqual(@as(u32, 0), terminator);
+    try std.testing.expectEqualStrings("argv-demo.elf\x00", try cpu.getBytes(argv_0, 14));
+    try std.testing.expectEqualStrings("hello\x00", try cpu.getBytes(argv_1, 6));
+}
+
+test "initial stack rejects more arguments than its address table can hold" {
+    var cpu = Cpu{};
+    const arguments = [_][]const u8{
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+    };
+
+    try std.testing.expectError(
+        error.TooManyArguments,
+        host_mod.prepareInitialStack(&cpu, &arguments),
+    );
 }

@@ -202,6 +202,18 @@ pub fn main(init: std.process.Init) !void {
     const c_demo_result = try host.run(&c_demo_cpu, 10_000);
     std.log.info("{f}\n", .{c_demo_result});
 
+    const argv_demo = try elf.loadElf(io, allocator, "programs/argv-demo.elf");
+    defer allocator.free(argv_demo);
+
+    var argv_demo_cpu = Cpu{};
+    try elf.loadElfIntoCpu(allocator, &argv_demo_cpu, argv_demo);
+
+    std.debug.print("\n=== Command-line argument demo ===\n", .{});
+
+    try host_mod.prepareInitialStack(&argv_demo_cpu, &.{ "argv-demo.elf", "hello" });
+    const argv_demo_result = try host.run(&argv_demo_cpu, 10_000);
+    std.log.info("{f}\n", .{argv_demo_result});
+
     const read_demo = try elf.loadElf(io, allocator, "programs/read-demo.elf");
     defer allocator.free(read_demo);
 

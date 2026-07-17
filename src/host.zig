@@ -20,6 +20,14 @@ pub const RunResult = union(enum) {
     }
 };
 
+const Syscall = enum(u32) {
+    READ = 63,
+    WRITE = 64,
+    EXIT = 93,
+    EXIT_GROUP = 94,
+    _,
+};
+
 const ErrorCode = enum(u32) {
     EBADF = 9,
     EFAULT = 14,
@@ -80,8 +88,9 @@ pub const Host = struct {
     }
 
     pub fn handleSyscall(self: *Host, cpu: *Cpu, request: SyscallRequest) !SyscallResult {
-        switch (request.number) {
-            63 => {
+        const sc: Syscall = @enumFromInt(request.number);
+        switch (sc) {
+            .READ => {
                 const fd = request.args[0];
                 const addr = request.args[1];
                 const len = request.args[2];
@@ -99,7 +108,7 @@ pub const Host = struct {
 
                 return .{ .returned = @intCast(bytes_read) };
             },
-            64 => {
+            .WRITE => {
                 const fd = request.args[0];
                 const addr = request.args[1];
                 const len = request.args[2];
@@ -116,7 +125,7 @@ pub const Host = struct {
 
                 return .{ .returned = len };
             },
-            93, 94 => return .{ .exited = request.args[0] }, // exit, exit_group
+            .EXIT, .EXIT_GROUP => return .{ .exited = request.args[0] }, // exit, exit_group
             else => {
                 std.log.err("Syscall number {d} not implemented\n", .{request.number});
                 return .{ .returned = errno(.ENOSYS) };
@@ -124,3 +133,38 @@ pub const Host = struct {
         }
     }
 };
+
+pub fn prepareInitialStack(cpu: *Cpu, argv: []const []const u8) !void {
+    var cursor = cpu.memory.len;
+
+    // FIXME: dynamically allocate addresses array based on argv.len
+    var addresses: [10]u32 = undefined;
+    if (argv.len > addresses.len) return error.TooManyArguments;
+
+    for (0..argv.len) |i| {
+        const arg = argv[argv.len - i - 1]; // reverse order
+        const arg_len = arg.len + 1; // +1 for null terminator
+        if (arg_len > cursor) return error.StackOverflow;
+        cursor -= arg_len;
+        @memcpy(cpu.memory[cursor..][0..arg.len], arg);
+        cpu.memory[cursor + arg.len] = 0; // null terminator
+        addresses[argv.len - i - 1] = @intCast(cursor);
+    }
+
+    const table_size = (argv.len + 2) * 4; // +2 for argc and the null terminator
+    if (table_size > cursor) return error.StackOverflow;
+    const table_start_unaligned = cursor - table_size;
+    const table_start = std.mem.alignBackward(usize, table_start_unaligned, 16);
+
+    std.mem.writeInt(u32, cpu.memory[table_start..][0..4], @intCast(argv.len), .little); // argc
+
+    for (0..argv.len) |i| {
+        const offset = 4 + (i * 4);
+        std.mem.writeInt(u32, cpu.memory[table_start + offset ..][0..4], addresses[i], .little);
+    }
+
+    const null_offset = 4 + (argv.len * 4);
+    std.mem.writeInt(u32, cpu.memory[table_start + null_offset ..][0..4], 0, .little);
+
+    cpu.regs[2] = @intCast(table_start); // set sp to the new stack pointer
+}
