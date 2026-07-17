@@ -5,7 +5,7 @@
 _start:
     lui  sp, 0x10
     jal  ra, main
-    addi a0, x0, 69
+
     addi a7, x0, 93
     ecall
 

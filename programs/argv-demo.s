@@ -8,7 +8,6 @@ _start:
     addi a1, sp, 4
     jal  ra, main
 
-    addi a0, x0, 69
     addi a7, x0, 93
     ecall
 

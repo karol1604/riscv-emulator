@@ -17,7 +17,6 @@ _start:
     addi x31, x0, 1
 
     addi a7, x0, 93
-    addi a0, x0, 69
     ecall
 
 failed:
