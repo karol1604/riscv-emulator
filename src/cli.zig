@@ -47,5 +47,11 @@ pub fn run(init: std.process.Init) !u8 {
             try stderr.interface.writeAll("Guest reached a breakpoint\n");
             return 1;
         },
+        .fault => |fault| {
+            try stderr.interface.writeAll("Guest faulted: ");
+            try fault.format(&stderr.interface);
+            try stderr.interface.writeAll("\n");
+            return 1;
+        },
     };
 }

@@ -348,13 +348,13 @@ test "unaligned lh lhu and sh fail without advancing pc" {
     var lh_cpu = Cpu{};
     try loadWords(&lh_cpu, 0, &.{0x00009103}); // lh x2, 0(x1)
     lh_cpu.regs[1] = 257;
-    try std.testing.expectError(error.UnalignedAccess, lh_cpu.runInstructionsForTesting(1));
+    try helpers.expectFault(&lh_cpu, .load_address_misaligned, 0, 257);
     try std.testing.expectEqual(@as(u32, 0), lh_cpu.pc);
 
     var lhu_cpu = Cpu{};
     try loadWords(&lhu_cpu, 0, &.{0x0000d103}); // lhu x2, 0(x1)
     lhu_cpu.regs[1] = 257;
-    try std.testing.expectError(error.UnalignedAccess, lhu_cpu.runInstructionsForTesting(1));
+    try helpers.expectFault(&lhu_cpu, .load_address_misaligned, 0, 257);
     try std.testing.expectEqual(@as(u32, 0), lhu_cpu.pc);
 
     var sh_cpu = Cpu{};
@@ -362,7 +362,7 @@ test "unaligned lh lhu and sh fail without advancing pc" {
     sh_cpu.regs[1] = 257;
     sh_cpu.regs[2] = 0xbeef;
     const before = sh_cpu.memory[256..260].*;
-    try std.testing.expectError(error.UnalignedAccess, sh_cpu.runInstructionsForTesting(1));
+    try helpers.expectFault(&sh_cpu, .store_address_misaligned, 0, 257);
     try std.testing.expectEqual(@as(u32, 0), sh_cpu.pc);
     try std.testing.expectEqualSlices(u8, &before, sh_cpu.memory[256..260]);
 }
@@ -372,7 +372,7 @@ test "unsupported opcode is rejected without advancing pc" {
     const program = [_]u8{ 0xff, 0xff, 0xff, 0xff };
     try cpu.loadProgramAt(0, &program);
 
-    try std.testing.expectError(error.UnsupportedOpcode, cpu.runInstructionsForTesting(1));
+    try helpers.expectFault(&cpu, .illegal_instruction, 0, 0xffff_ffff);
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
 
@@ -382,7 +382,7 @@ test "unsupported logical funct7 is rejected without advancing pc" {
     std.mem.writeInt(u32, &program, 0x4020f2b3, .little);
     try cpu.loadProgramAt(0, &program);
 
-    try std.testing.expectError(error.UnsupportedInstruction, cpu.runInstructionsForTesting(1));
+    try helpers.expectFault(&cpu, .illegal_instruction, 0, 0x4020f2b3);
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
 
@@ -392,7 +392,7 @@ test "unsupported shift-immediate funct7 is rejected without advancing pc" {
     std.mem.writeInt(u32, &program, 0x40109113, .little);
     try cpu.loadProgramAt(0, &program);
 
-    try std.testing.expectError(error.UnsupportedInstruction, cpu.runInstructionsForTesting(1));
+    try helpers.expectFault(&cpu, .illegal_instruction, 0, 0x40109113);
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
 

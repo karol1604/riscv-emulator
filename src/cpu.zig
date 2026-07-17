@@ -15,6 +15,30 @@ pub const StepResult = union(enum) {
     running,
     syscall: SyscallRequest,
     breakpoint,
+    fault: Fault,
+};
+
+pub const FaultReason = enum {
+    instruction_address_misaligned,
+    instruction_access_fault,
+    illegal_instruction,
+    load_address_misaligned,
+    load_access_fault,
+    store_address_misaligned,
+    store_access_fault,
+};
+
+pub const Fault = struct {
+    reason: FaultReason,
+    pc: u32,
+    value: u32,
+
+    pub fn format(self: Fault, writer: *std.Io.Writer) !void {
+        try writer.print(
+            "{s} at PC=0x{x:0>8}, value=0x{x:0>8}",
+            .{ @tagName(self.reason), self.pc, self.value },
+        );
+    }
 };
 
 pub const Cpu = struct {
@@ -34,6 +58,7 @@ pub const Cpu = struct {
             switch (try self.step()) {
                 .running => {},
                 .syscall, .breakpoint => return error.UnexpectedExecutionEvent,
+                .fault => return error.UnexpectedCpuFault,
             }
         }
     }
@@ -76,8 +101,35 @@ pub const Cpu = struct {
 
     pub fn step(self: *Cpu) !StepResult {
         const instruction_pc = self.pc;
-        const raw = try self.fetchInstruction();
-        const instr = try decode(raw);
+        const raw = self.fetchInstruction() catch |err| switch (err) {
+            error.OutOfBounds => {
+                return .{
+                    .fault = .{
+                        .reason = .instruction_access_fault,
+                        .pc = instruction_pc,
+                        .value = instruction_pc,
+                    },
+                };
+            },
+            error.UnalignedAccess => {
+                return .{
+                    .fault = .{
+                        .reason = .instruction_address_misaligned,
+                        .pc = instruction_pc,
+                        .value = instruction_pc,
+                    },
+                };
+            },
+        };
+        const instr = decode(raw) catch {
+            return .{
+                .fault = .{
+                    .reason = .illegal_instruction,
+                    .pc = instruction_pc,
+                    .value = raw,
+                },
+            };
+        };
 
         // if (!builtin.is_test) {
         //     std.debug.print("0x{x:0>8}: {f}\n", .{ self.pc, instr });
@@ -85,7 +137,10 @@ pub const Cpu = struct {
 
         self.pc +%= 4; // increment before execution to handle branches correctly
         errdefer self.pc = instruction_pc;
-        try self.executeInstruction(instr, instruction_pc);
+        if (self.executeInstruction(instr, instruction_pc)) |fault| {
+            self.pc = instruction_pc; // restore PC on fault
+            return .{ .fault = fault };
+        }
 
         if (instr == .ebreak) return .{ .breakpoint = {} };
         if (instr == .ecall) {
@@ -105,200 +160,303 @@ pub const Cpu = struct {
         return .{ .running = {} };
     }
 
-    fn executeInstruction(self: *Cpu, instr: Instruction, instruction_pc: u32) !void {
+    fn executeInstruction(self: *Cpu, instr: Instruction, instruction_pc: u32) ?Fault {
         switch (instr) {
             .addi => |i| {
                 const imm: u32 = @bitCast(@as(i32, i.imm));
                 self.writeRegister(i.rd, self.readRegister(i.rs1) +% imm);
+                return null;
             },
             .add => |i| {
                 self.writeRegister(
                     i.rd,
                     self.readRegister(i.rs1) +% self.readRegister(i.rs2),
                 );
+                return null;
             },
             .sub => |i| {
                 self.writeRegister(
                     i.rd,
                     self.readRegister(i.rs1) -% self.readRegister(i.rs2),
                 );
+                return null;
             },
             .andi => |i| {
                 const imm: u32 = @bitCast(@as(i32, i.imm));
                 self.writeRegister(i.rd, self.readRegister(i.rs1) & imm);
+                return null;
             },
             .@"and" => |i| {
                 self.writeRegister(
                     i.rd,
                     self.readRegister(i.rs1) & self.readRegister(i.rs2),
                 );
+                return null;
             },
             .ori => |i| {
                 const imm: u32 = @bitCast(@as(i32, i.imm));
                 self.writeRegister(i.rd, self.readRegister(i.rs1) | imm);
+                return null;
             },
             .@"or" => |i| {
                 self.writeRegister(
                     i.rd,
                     self.readRegister(i.rs1) | self.readRegister(i.rs2),
                 );
+                return null;
             },
             .xori => |i| {
                 const imm: u32 = @bitCast(@as(i32, i.imm));
                 self.writeRegister(i.rd, self.readRegister(i.rs1) ^ imm);
+                return null;
             },
             .xor => |i| {
                 self.writeRegister(
                     i.rd,
                     self.readRegister(i.rs1) ^ self.readRegister(i.rs2),
                 );
+                return null;
             },
             .sll => |i| {
                 const shamt: u5 = @truncate(self.readRegister(i.rs2));
                 self.writeRegister(i.rd, self.readRegister(i.rs1) << shamt);
+                return null;
             },
             .slli => |i| {
                 self.writeRegister(i.rd, self.readRegister(i.rs1) << i.shamt);
+                return null;
             },
             .srl => |i| {
                 const shamt: u5 = @truncate(self.readRegister(i.rs2));
                 self.writeRegister(i.rd, self.readRegister(i.rs1) >> shamt);
+                return null;
             },
             .srli => |i| {
                 self.writeRegister(i.rd, self.readRegister(i.rs1) >> i.shamt);
+                return null;
             },
             .sra => |i| {
                 const shamt: u5 = @truncate(self.readRegister(i.rs2));
                 const value: i32 = @bitCast(self.readRegister(i.rs1));
                 const result: u32 = @bitCast(value >> shamt);
                 self.writeRegister(i.rd, result);
+                return null;
             },
             .srai => |i| {
                 const value: i32 = @bitCast(self.readRegister(i.rs1));
                 const result: u32 = @bitCast(value >> i.shamt);
                 self.writeRegister(i.rd, result);
+                return null;
             },
             .slt => |i| {
                 const lhs: i32 = @bitCast(self.readRegister(i.rs1));
                 const rhs: i32 = @bitCast(self.readRegister(i.rs2));
                 self.writeRegister(i.rd, @intFromBool(lhs < rhs));
+                return null;
             },
             .sltu => |i| {
                 const lhs = self.readRegister(i.rs1);
                 const rhs = self.readRegister(i.rs2);
                 self.writeRegister(i.rd, @intFromBool(lhs < rhs));
+                return null;
             },
             .slti => |i| {
                 const lhs: i32 = @bitCast(self.readRegister(i.rs1));
                 const rhs: i32 = @intCast(i.imm);
                 self.writeRegister(i.rd, @intFromBool(lhs < rhs));
+                return null;
             },
             .sltiu => |i| {
                 const lhs = self.readRegister(i.rs1);
                 const rhs: u32 = @bitCast(@as(i32, i.imm));
                 self.writeRegister(i.rd, @intFromBool(lhs < rhs));
+                return null;
             },
             .lw => |i| {
                 const address = self.effectiveAddress(i.rs1, i.imm);
-                const value = try self.readMemory(u32, address);
+                const value = self.readMemory(u32, address) catch |err| switch (err) {
+                    error.OutOfBounds => return .{
+                        .reason = .load_access_fault,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                    error.UnalignedAccess => return .{
+                        .reason = .load_address_misaligned,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                };
                 self.writeRegister(i.rd, value);
+                return null;
             },
             .sw => |i| {
                 const address = self.effectiveAddress(i.rs1, i.imm);
-                try self.writeMemory(u32, address, self.readRegister(i.rs2));
+                return self.isFaultWriteMemory(
+                    u32,
+                    address,
+                    self.readRegister(i.rs2),
+                    instruction_pc,
+                );
             },
             .lb => |i| {
                 const address = self.effectiveAddress(i.rs1, i.imm);
-                const value: i8 = @bitCast(try self.readMemory(u8, address));
+                const mem = self.readMemory(u8, address) catch |err| switch (err) {
+                    error.OutOfBounds => return .{
+                        .reason = .load_access_fault,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                    error.UnalignedAccess => return .{
+                        .reason = .load_address_misaligned,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                };
+                const value: i8 = @bitCast(mem);
                 const extended: i32 = @intCast(value);
                 self.writeRegister(i.rd, @bitCast(extended));
+                return null;
             },
             .lbu => |i| {
                 const address = self.effectiveAddress(i.rs1, i.imm);
-                self.writeRegister(i.rd, @intCast(try self.readMemory(u8, address)));
+                const mem = self.readMemory(u8, address) catch |err| switch (err) {
+                    error.OutOfBounds => return .{
+                        .reason = .load_access_fault,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                    error.UnalignedAccess => return .{
+                        .reason = .load_address_misaligned,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                };
+                self.writeRegister(i.rd, @intCast(mem));
+                return null;
             },
             .lh => |i| {
                 const address = self.effectiveAddress(i.rs1, i.imm);
-                const value: i16 = @bitCast(try self.readMemory(u16, address));
+                const mem = self.readMemory(u16, address) catch |err| switch (err) {
+                    error.OutOfBounds => return .{
+                        .reason = .load_access_fault,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                    error.UnalignedAccess => return .{
+                        .reason = .load_address_misaligned,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                };
+                const value: i16 = @bitCast(mem);
                 const extended: i32 = @intCast(value);
                 self.writeRegister(i.rd, @bitCast(extended));
+                return null;
             },
             .lhu => |i| {
                 const address = self.effectiveAddress(i.rs1, i.imm);
-                self.writeRegister(i.rd, @intCast(try self.readMemory(u16, address)));
+                const mem = self.readMemory(u16, address) catch |err| switch (err) {
+                    error.OutOfBounds => return .{
+                        .reason = .load_access_fault,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                    error.UnalignedAccess => return .{
+                        .reason = .load_address_misaligned,
+                        .pc = instruction_pc,
+                        .value = address,
+                    },
+                };
+                self.writeRegister(i.rd, @intCast(mem));
+                return null;
             },
             .sb => |i| {
                 const address = self.effectiveAddress(i.rs1, i.imm);
                 const value: u8 = @truncate(self.readRegister(i.rs2));
-                try self.writeMemory(u8, address, value);
+                return self.isFaultWriteMemory(u8, address, value, instruction_pc);
             },
             .sh => |i| {
                 const address = self.effectiveAddress(i.rs1, i.imm);
                 const value: u16 = @truncate(self.readRegister(i.rs2));
-                try self.writeMemory(u16, address, value);
+                return self.isFaultWriteMemory(u16, address, value, instruction_pc);
             },
             .beq => |i| {
                 if (self.readRegister(i.rs1) == self.readRegister(i.rs2)) {
-                    try self.takeBranch(instruction_pc, i.imm);
+                    return self.isFaultTakeBranch(instruction_pc, i.imm);
                 }
+                return null;
             },
             .bne => |i| {
                 if (self.readRegister(i.rs1) != self.readRegister(i.rs2)) {
-                    try self.takeBranch(instruction_pc, i.imm);
+                    return self.isFaultTakeBranch(instruction_pc, i.imm);
                 }
+                return null;
             },
             .blt => |i| {
                 const lhs: i32 = @bitCast(self.readRegister(i.rs1));
                 const rhs: i32 = @bitCast(self.readRegister(i.rs2));
                 if (lhs < rhs) {
-                    try self.takeBranch(instruction_pc, i.imm);
+                    return self.isFaultTakeBranch(instruction_pc, i.imm);
                 }
+                return null;
             },
             .bltu => |i| {
                 const lhs = self.readRegister(i.rs1);
                 const rhs = self.readRegister(i.rs2);
                 if (lhs < rhs) {
-                    try self.takeBranch(instruction_pc, i.imm);
+                    return self.isFaultTakeBranch(instruction_pc, i.imm);
                 }
+                return null;
             },
             .bge => |i| {
                 const lhs: i32 = @bitCast(self.readRegister(i.rs1));
                 const rhs: i32 = @bitCast(self.readRegister(i.rs2));
                 if (lhs >= rhs) {
-                    try self.takeBranch(instruction_pc, i.imm);
+                    return self.isFaultTakeBranch(instruction_pc, i.imm);
                 }
+                return null;
             },
             .bgeu => |i| {
                 const lhs = self.readRegister(i.rs1);
                 const rhs = self.readRegister(i.rs2);
                 if (lhs >= rhs) {
-                    try self.takeBranch(instruction_pc, i.imm);
+                    return self.isFaultTakeBranch(instruction_pc, i.imm);
                 }
+                return null;
             },
             .jal => |i| {
-                try self.takeBranch(instruction_pc, i.imm);
+                if (self.isFaultTakeBranch(instruction_pc, i.imm)) |fault| return fault;
                 self.writeRegister(i.rd, instruction_pc +% 4);
+                return null;
             },
             .jalr => |i| {
                 const base = self.readRegister(i.rs1);
                 const offset: u32 = @bitCast(@as(i32, i.imm));
                 const target = (base +% offset) & ~@as(u32, 1);
 
-                if (target % 4 != 0) return error.UnalignedAccess;
+                if (target % 4 != 0) return .{
+                    .reason = .instruction_address_misaligned,
+                    .pc = instruction_pc,
+                    .value = target,
+                };
 
                 self.writeRegister(i.rd, instruction_pc +% 4);
                 self.pc = target;
+                return null;
             },
             .lui => |i| {
                 self.writeRegister(i.rd, @as(u32, i.imm) << 12);
+                return null;
             },
             .auipc => |i| {
                 self.writeRegister(i.rd, instruction_pc +% (@as(u32, i.imm) << 12));
+                return null;
             },
             .ebreak => {
                 if (!builtin.is_test) {
                     std.debug.print("EBREAK instruction executed at 0x{x:0>8}\n", .{instruction_pc});
                 }
+                return null;
             },
             .mul => |i| {
                 const lhs = self.readRegister(i.rs1);
@@ -306,6 +464,7 @@ pub const Cpu = struct {
                 const prod: u64 = @as(u64, lhs) * @as(u64, rhs);
                 const result: u32 = @truncate(prod);
                 self.writeRegister(i.rd, result);
+                return null;
             },
             .mulhu => |i| {
                 const lhs = self.readRegister(i.rs1);
@@ -313,6 +472,7 @@ pub const Cpu = struct {
                 const prod: u64 = @as(u64, lhs) * @as(u64, rhs);
                 const result: u32 = @truncate(prod >> 32);
                 self.writeRegister(i.rd, result);
+                return null;
             },
             .mulh => |i| {
                 const lhs: i32 = @bitCast(self.readRegister(i.rs1));
@@ -320,6 +480,7 @@ pub const Cpu = struct {
                 const prod: i64 = @as(i64, lhs) * @as(i64, rhs);
                 const prod_bits: u64 = @bitCast(prod);
                 self.writeRegister(i.rd, @truncate(prod_bits >> 32));
+                return null;
             },
             .mulhsu => |i| {
                 const lhs: i32 = @bitCast(self.readRegister(i.rs1));
@@ -327,6 +488,7 @@ pub const Cpu = struct {
                 const prod: i64 = @as(i64, lhs) * @as(i64, rhs);
                 const prod_bits: u64 = @bitCast(prod);
                 self.writeRegister(i.rd, @truncate(prod_bits >> 32));
+                return null;
             },
             .div => |i| {
                 const dividend: i32 = @bitCast(self.readRegister(i.rs1));
@@ -339,6 +501,7 @@ pub const Cpu = struct {
                     const result = @divTrunc(dividend, divisor);
                     self.writeRegister(i.rd, @bitCast(result));
                 }
+                return null;
             },
             .rem => |i| {
                 const dividend: i32 = @bitCast(self.readRegister(i.rs1));
@@ -351,6 +514,7 @@ pub const Cpu = struct {
                     const result: i32 = @rem(dividend, divisor);
                     self.writeRegister(i.rd, @bitCast(result));
                 }
+                return null;
             },
             .divu => |i| {
                 const dividend = self.readRegister(i.rs1);
@@ -361,6 +525,7 @@ pub const Cpu = struct {
                     const result = @divTrunc(dividend, divisor);
                     self.writeRegister(i.rd, result);
                 }
+                return null;
             },
             .remu => |i| {
                 const dividend = self.readRegister(i.rs1);
@@ -371,10 +536,27 @@ pub const Cpu = struct {
                     const result = @rem(dividend, divisor);
                     self.writeRegister(i.rd, result);
                 }
+                return null;
             },
-            .ecall => {},
+            .ecall => {
+                return null;
+            },
             // else => return error.UnsupportedInstruction,
         }
+    }
+
+    fn isFaultTakeBranch(self: *Cpu, instruction_pc: u32, offset: anytype) ?Fault {
+        self.takeBranch(instruction_pc, offset) catch |err| switch (err) {
+            error.UnalignedAccess => {
+                const ib: u32 = @bitCast(@as(i32, offset));
+                return .{
+                    .reason = .instruction_address_misaligned,
+                    .pc = instruction_pc,
+                    .value = instruction_pc +% ib,
+                };
+            },
+        };
+        return null;
     }
 
     fn takeBranch(self: *Cpu, instruction_pc: u32, offset: anytype) !void {
@@ -403,6 +585,32 @@ pub const Cpu = struct {
         const addr = try self.validateAccess(address, T);
         if (T == u8) return self.memory[addr];
         return std.mem.readInt(T, self.memory[addr..][0..@sizeOf(T)], .little);
+    }
+
+    fn isFaultWriteMemory(
+        self: *Cpu,
+        comptime T: type,
+        address: u32,
+        value: T,
+        instruction_pc: u32,
+    ) ?Fault {
+        self.writeMemory(T, address, value) catch |err| switch (err) {
+            error.OutOfBounds => {
+                return .{
+                    .reason = .store_access_fault,
+                    .pc = instruction_pc,
+                    .value = address,
+                };
+            },
+            error.UnalignedAccess => {
+                return .{
+                    .reason = .store_address_misaligned,
+                    .pc = instruction_pc,
+                    .value = address,
+                };
+            },
+        };
+        return null;
     }
 
     fn writeMemory(self: *Cpu, comptime T: type, address: u32, value: T) !void {

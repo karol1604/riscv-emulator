@@ -55,7 +55,7 @@ test "misaligned target faults only when branch is taken" {
     try loadWords(&taken, 0, &.{encodeBranch(0b000, 2)});
     taken.regs[1] = 5;
     taken.regs[2] = 5;
-    try std.testing.expectError(error.UnalignedAccess, taken.runInstructionsForTesting(1));
+    try helpers.expectFault(&taken, .instruction_address_misaligned, 0, 2);
     try std.testing.expectEqual(@as(u32, 0), taken.pc);
 
     var not_taken = Cpu{};
@@ -102,7 +102,7 @@ test "misaligned jal target preserves PC and destination register" {
     try loadWords(&cpu, 0, &.{encodeJal(5, 2)});
     cpu.regs[5] = 0xdead_beef;
 
-    try std.testing.expectError(error.UnalignedAccess, cpu.runInstructionsForTesting(1));
+    try helpers.expectFault(&cpu, .instruction_address_misaligned, 0, 2);
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
     try std.testing.expectEqual(@as(u32, 0xdead_beef), cpu.regs[5]);
 }
@@ -146,7 +146,7 @@ test "misaligned jalr target preserves PC and destination register" {
     cpu.regs[1] = 6;
     cpu.regs[5] = 0xdead_beef;
 
-    try std.testing.expectError(error.UnalignedAccess, cpu.runInstructionsForTesting(1));
+    try helpers.expectFault(&cpu, .instruction_address_misaligned, 0, 6);
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
     try std.testing.expectEqual(@as(u32, 0xdead_beef), cpu.regs[5]);
 }
@@ -155,7 +155,8 @@ test "jalr rejects nonzero funct3" {
     var cpu = Cpu{};
     try loadWords(&cpu, 0, &.{encodeJalr(5, 1, 0) | (@as(u32, 1) << 12)});
 
-    try std.testing.expectError(error.UnsupportedInstruction, cpu.runInstructionsForTesting(1));
+    const raw = encodeJalr(5, 1, 0) | (@as(u32, 1) << 12);
+    try helpers.expectFault(&cpu, .illegal_instruction, 0, raw);
     try std.testing.expectEqual(@as(u32, 0), cpu.pc);
 }
 
@@ -168,9 +169,6 @@ test "ecall and ebreak require their exact system instruction encodings" {
     }) |word| {
         var cpu = Cpu{};
         try loadWords(&cpu, 0, &.{word});
-        try std.testing.expectError(
-            error.UnsupportedInstruction,
-            cpu.runInstructionsForTesting(1),
-        );
+        try helpers.expectFault(&cpu, .illegal_instruction, 0, word);
     }
 }

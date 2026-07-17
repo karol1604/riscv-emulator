@@ -11,11 +11,16 @@ pub const SyscallResult = union(enum) {
 pub const RunResult = union(enum) {
     exited: u32,
     breakpoint,
+    fault: cpu_mod.Fault,
 
     pub fn format(self: RunResult, writer: *std.Io.Writer) !void {
         switch (self) {
             .exited => |code| try writer.print("Program exited with code {d}", .{code}),
             .breakpoint => try writer.print("Breakpoint reached", .{}),
+            .fault => |fault| {
+                try writer.writeAll("Program faulted: ");
+                try fault.format(writer);
+            },
         }
     }
 };
@@ -60,6 +65,7 @@ pub const Host = struct {
                     .exited => |code| return .{ .exited = code },
                 },
                 .breakpoint => return .{ .breakpoint = {} },
+                .fault => |fault| return .{ .fault = fault },
             }
         }
 

@@ -22,7 +22,7 @@ test "exit syscall returns the guest exit status" {
 
     switch (result) {
         .exited => |code| try std.testing.expectEqual(@as(u32, 7), code),
-        .breakpoint => return error.UnexpectedRunResult,
+        .breakpoint, .fault => return error.UnexpectedRunResult,
     }
     try std.testing.expectEqual(@as(u32, 12), cpu.pc);
 }
@@ -41,7 +41,7 @@ test "ebreak returns a breakpoint run result" {
 
     switch (result) {
         .breakpoint => {},
-        .exited => return error.UnexpectedRunResult,
+        .exited, .fault => return error.UnexpectedRunResult,
     }
     try std.testing.expectEqual(@as(u32, 4), cpu.pc);
 }
@@ -58,6 +58,46 @@ test "host runner reports instruction limit exhaustion" {
     var host = Host.init(&stdout, &stderr, &stdin);
     try std.testing.expectError(error.InstructionLimitExceeded, host.run(&cpu, 1));
     try std.testing.expectEqual(@as(u32, 1), cpu.regs[1]);
+}
+
+test "host runner returns a structured CPU fault" {
+    var cpu = Cpu{};
+    try helpers.loadWords(&cpu, 0, &.{0xffff_ffff});
+
+    var stdout_buffer: [1]u8 = undefined;
+    var stderr_buffer: [1]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buffer);
+    var stderr: std.Io.Writer = .fixed(&stderr_buffer);
+    var stdin: std.Io.Reader = .fixed("");
+    var host = Host.init(&stdout, &stderr, &stdin);
+
+    switch (try host.run(&cpu, 1)) {
+        .fault => |fault| {
+            try std.testing.expectEqual(.illegal_instruction, fault.reason);
+            try std.testing.expectEqual(@as(u32, 0), fault.pc);
+            try std.testing.expectEqual(@as(u32, 0xffff_ffff), fault.value);
+        },
+        else => return error.ExpectedCpuFault,
+    }
+    try std.testing.expectEqual(@as(u32, 0), cpu.pc);
+}
+
+test "run result formats a structured CPU fault" {
+    var buffer: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const result: host_mod.RunResult = .{
+        .fault = .{
+            .reason = .load_access_fault,
+            .pc = 0x120,
+            .value = 0x10003,
+        },
+    };
+
+    try result.format(&writer);
+    try std.testing.expectEqualStrings(
+        "Program faulted: load_access_fault at PC=0x00000120, value=0x00010003",
+        writer.buffered(),
+    );
 }
 
 test "write syscall sends guest memory to stdout and stderr" {

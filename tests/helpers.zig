@@ -1,5 +1,22 @@
 const std = @import("std");
-const Cpu = @import("cpu").Cpu;
+const cpu_mod = @import("cpu");
+const Cpu = cpu_mod.Cpu;
+
+pub fn expectFault(
+    cpu: *Cpu,
+    expected_reason: cpu_mod.FaultReason,
+    expected_pc: u32,
+    expected_value: u32,
+) !void {
+    switch (try cpu.step()) {
+        .fault => |fault| {
+            try std.testing.expectEqual(expected_reason, fault.reason);
+            try std.testing.expectEqual(expected_pc, fault.pc);
+            try std.testing.expectEqual(expected_value, fault.value);
+        },
+        else => return error.ExpectedCpuFault,
+    }
+}
 
 pub fn loadWords(cpu: *Cpu, address: u32, comptime words: []const u32) !void {
     var program: [words.len * @sizeOf(u32)]u8 = undefined;
