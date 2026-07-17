@@ -4,6 +4,10 @@ const host_mod = @import("host");
 const Host = host_mod.Host;
 const helpers = @import("helpers.zig");
 
+fn negativeErrno(code: u32) u32 {
+    return 0 -% code;
+}
+
 test "exit syscall returns the guest exit status" {
     var cpu = Cpu{};
     try helpers.loadWords(&cpu, 0, &.{
@@ -17,7 +21,7 @@ test "exit syscall returns the guest exit status" {
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
     var stdin: std.Io.Reader = .fixed("");
-    var host = Host.init(&stdout, &stderr, &stdin);
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
     const result = try host.run(&cpu, 3);
 
     switch (result) {
@@ -36,7 +40,7 @@ test "ebreak returns a breakpoint run result" {
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
     var stdin: std.Io.Reader = .fixed("");
-    var host = Host.init(&stdout, &stderr, &stdin);
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
     const result = try host.run(&cpu, 1);
 
     switch (result) {
@@ -55,7 +59,7 @@ test "host runner reports instruction limit exhaustion" {
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
     var stdin: std.Io.Reader = .fixed("");
-    var host = Host.init(&stdout, &stderr, &stdin);
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
     try std.testing.expectError(error.InstructionLimitExceeded, host.run(&cpu, 1));
     try std.testing.expectEqual(@as(u32, 1), cpu.regs[1]);
 }
@@ -69,7 +73,7 @@ test "host runner returns a structured CPU fault" {
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
     var stdin: std.Io.Reader = .fixed("");
-    var host = Host.init(&stdout, &stderr, &stdin);
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
 
     switch (try host.run(&cpu, 1)) {
         .fault => |fault| {
@@ -110,7 +114,7 @@ test "write syscall sends guest memory to stdout and stderr" {
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
     var stdin: std.Io.Reader = .fixed("");
-    var host = Host.init(&stdout, &stderr, &stdin);
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
 
     const stdout_result = try host.handleSyscall(&cpu, .{
         .number = 64,
@@ -135,7 +139,7 @@ test "read syscall copies buffered stdin into guest memory and reaches EOF" {
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
     var stdin: std.Io.Reader = .fixed("hello\n");
-    var host = Host.init(&stdout, &stderr, &stdin);
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
 
     const zero_length = try host.handleSyscall(&cpu, .{
         .number = 63,
@@ -170,7 +174,7 @@ test "read syscall validates the descriptor and guest buffer" {
     var stdout: std.Io.Writer = .fixed(&stdout_buffer);
     var stderr: std.Io.Writer = .fixed(&stderr_buffer);
     var stdin: std.Io.Reader = .fixed("input");
-    var host = Host.init(&stdout, &stderr, &stdin);
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
 
     const bad_fd = try host.handleSyscall(&cpu, .{
         .number = 63,
@@ -212,4 +216,115 @@ test "initial stack rejects more arguments than its address table can hold" {
         error.TooManyArguments,
         host_mod.prepareInitialStack(&cpu, &arguments),
     );
+}
+
+test "openat read and close manage a guest file descriptor" {
+    var cpu = Cpu{};
+    try cpu.loadProgramAt(0x100, "README.md\x00");
+
+    var stdout_buffer: [1]u8 = undefined;
+    var stderr_buffer: [1]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buffer);
+    var stderr: std.Io.Writer = .fixed(&stderr_buffer);
+    var stdin: std.Io.Reader = .fixed("");
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
+    defer host.deinit();
+
+    const opened = try host.handleSyscall(&cpu, .{
+        .number = 56,
+        .args = .{ 0xffff_ff9c, 0x100, 0, 0, 0, 0 },
+    });
+    const fd = opened.returned;
+    try std.testing.expectEqual(@as(u32, 3), fd);
+
+    const read = try host.handleSyscall(&cpu, .{
+        .number = 63,
+        .args = .{ fd, 0x200, 32, 0, 0, 0 },
+    });
+    try std.testing.expect(read.returned > 0);
+    try std.testing.expectEqualStrings(
+        "# RISC-V Emulator",
+        try cpu.getBytes(0x200, "# RISC-V Emulator".len),
+    );
+
+    const closed = try host.handleSyscall(&cpu, .{
+        .number = 57,
+        .args = .{ fd, 0, 0, 0, 0, 0 },
+    });
+    try std.testing.expectEqual(@as(u32, 0), closed.returned);
+
+    const read_after_close = try host.handleSyscall(&cpu, .{
+        .number = 63,
+        .args = .{ fd, 0x200, 1, 0, 0, 0 },
+    });
+    try std.testing.expectEqual(negativeErrno(9), read_after_close.returned);
+}
+
+test "openat returns specific errors for invalid requests" {
+    var cpu = Cpu{};
+    try cpu.loadProgramAt(0x100, "this-file-does-not-exist\x00");
+
+    var stdout_buffer: [1]u8 = undefined;
+    var stderr_buffer: [1]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buffer);
+    var stderr: std.Io.Writer = .fixed(&stderr_buffer);
+    var stdin: std.Io.Reader = .fixed("");
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
+    defer host.deinit();
+
+    const bad_dirfd = try host.handleSyscall(&cpu, .{
+        .number = 56,
+        .args = .{ 7, 0x100, 0, 0, 0, 0 },
+    });
+    const bad_flags = try host.handleSyscall(&cpu, .{
+        .number = 56,
+        .args = .{ 0xffff_ff9c, 0x100, 1, 0, 0, 0 },
+    });
+    const missing = try host.handleSyscall(&cpu, .{
+        .number = 56,
+        .args = .{ 0xffff_ff9c, 0x100, 0, 0, 0, 0 },
+    });
+    const bad_pointer = try host.handleSyscall(&cpu, .{
+        .number = 56,
+        .args = .{ 0xffff_ff9c, Cpu.memory_size, 0, 0, 0, 0 },
+    });
+
+    @memset(cpu.memory[0x100 .. 0x100 + 4096], 'a');
+    const long_path = try host.handleSyscall(&cpu, .{
+        .number = 56,
+        .args = .{ 0xffff_ff9c, 0x100, 0, 0, 0, 0 },
+    });
+
+    try std.testing.expectEqual(negativeErrno(9), bad_dirfd.returned);
+    try std.testing.expectEqual(negativeErrno(22), bad_flags.returned);
+    try std.testing.expectEqual(negativeErrno(2), missing.returned);
+    try std.testing.expectEqual(negativeErrno(14), bad_pointer.returned);
+    try std.testing.expectEqual(negativeErrno(36), long_path.returned);
+}
+
+test "openat returns EMFILE when the guest descriptor table is full" {
+    var cpu = Cpu{};
+    try cpu.loadProgramAt(0x100, "README.md\x00");
+
+    var stdout_buffer: [1]u8 = undefined;
+    var stderr_buffer: [1]u8 = undefined;
+    var stdout: std.Io.Writer = .fixed(&stdout_buffer);
+    var stderr: std.Io.Writer = .fixed(&stderr_buffer);
+    var stdin: std.Io.Reader = .fixed("");
+    var host = Host.init(std.testing.io, &stdout, &stderr, &stdin);
+    defer host.deinit();
+
+    for (0..host.file_descriptors.len) |index| {
+        const opened = try host.handleSyscall(&cpu, .{
+            .number = 56,
+            .args = .{ 0xffff_ff9c, 0x100, 0, 0, 0, 0 },
+        });
+        try std.testing.expectEqual(@as(u32, @intCast(index + 3)), opened.returned);
+    }
+
+    const full = try host.handleSyscall(&cpu, .{
+        .number = 56,
+        .args = .{ 0xffff_ff9c, 0x100, 0, 0, 0, 0 },
+    });
+    try std.testing.expectEqual(negativeErrno(24), full.returned);
 }

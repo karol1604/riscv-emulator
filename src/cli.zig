@@ -27,7 +27,8 @@ pub fn run(init: std.process.Init) !u8 {
     }
 
     var stdin = std.Io.File.stdin().readerStreaming(io, &stdin_buffer);
-    var host = Host.init(&stdout.interface, &stderr.interface, &stdin.interface);
+    var host = Host.init(io, &stdout.interface, &stderr.interface, &stdin.interface);
+    defer host.deinit();
 
     const elf_path = args[1];
     const elf_data = try elf.loadElf(io, allocator, elf_path);

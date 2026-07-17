@@ -80,6 +80,22 @@ pub const Cpu = struct {
         return self.memory[start..][0..length];
     }
 
+    pub fn readNullTerminatedString(
+        self: *const Cpu,
+        address: u32,
+        max_length: usize,
+    ) ![]const u8 {
+        const start: usize = @intCast(address);
+        if (start >= self.memory.len) return error.OutOfBounds;
+
+        var end: usize = start;
+        while (end < self.memory.len and end - start < max_length and self.memory[end] != 0) : (end += 1) {}
+        if (end - start == max_length) return error.NameTooLong;
+        if (end == self.memory.len) return error.OutOfBounds;
+
+        return self.memory[start..][0..(end - start)];
+    }
+
     pub fn zeroOutMemory(self: *Cpu, start: usize, end: usize) void {
         if (start > end or end > self.memory.len) return;
         @memset(self.memory[start..end], 0);
